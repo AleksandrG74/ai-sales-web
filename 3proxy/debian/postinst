@@ -1,0 +1,43 @@
+[ -f /bin/add3proxyuser ] && sed -i -e 's|@CMAKE_INSTALL_FULL_BINDIR@|/bin|g' -e 's|@3PROXY_CONFDIR@|/etc/3proxy/conf|g' -e 's|@CRYPT_PREFIX@|3proxy_|g' /bin/add3proxyuser; \
+[ -f /etc/init.d/3proxy ] && sed -i -e 's|@CMAKE_INSTALL_FULL_BINDIR@|/bin|g' -e 's|@CMAKE_INSTALL_FULL_SYSCONFDIR@|/etc|g' -e 's|USER=proxy|USER=root|g' /etc/init.d/3proxy; \
+[ -f /usr/lib/systemd/system/3proxy.service ] && sed -i -e 's|@CMAKE_INSTALL_FULL_BINDIR@|/bin|g' -e 's|@CMAKE_INSTALL_FULL_SYSCONFDIR@|/etc|g' -e 's|User=proxy|User=root|g' /usr/lib/systemd/system/3proxy.service; \
+
+if [ -d /etc/3proxy ]; then \
+ chmod -R o-rwx /etc/3proxy; \
+ chown -R proxy:proxy /etc/3proxy; \
+fi
+
+if [ -d /usr/local/3proxy ]; then \
+ chmod -R o-rwx /usr/local/3proxy; \
+ chown -R proxy:proxy /usr/local/3proxy; \
+fi
+
+if /bin/systemctl >/dev/null 2>&1; then \
+ /usr/sbin/update-rc.d 3proxy disable || true; \
+ /usr/sbin/chkconfig 3proxy off || true; \
+ /bin/systemctl enable 3proxy.service; \
+elif [ -x /usr/sbin/update-rc.d ]; then \
+ /usr/sbin/update-rc.d 3proxy defaults; \
+ /usr/sbin/update-rc.d 3proxy enable; \
+elif [ -x /usr/sbin/chkconfig ]; then \
+ /usr/sbin/chkconfig 3proxy on; \
+fi
+
+echo ""
+echo 3proxy installed.
+if /bin/systemctl >/dev/null 2>&1; then \
+ /bin/systemctl stop 3proxy.service ;\
+ /bin/systemctl start 3proxy.service ;\
+ echo use ;\
+ echo "  "systemctl start 3proxy.service ;\
+ echo to start proxy ;\
+ echo "  "systemctl stop 3proxy.service ;\
+ echo to stop proxy ;\
+elif [ -x /usr/sbin/service ]; then \
+ /usr/sbin/service 3proxy stop  || true;\
+ /usr/sbin/service 3proxy start  || true;\
+ echo "  "service 3proxy start ;\
+ echo to start proxy ;\
+ echo "  "service 3proxy stop ;\
+ echo to stop proxy ;\
+fi

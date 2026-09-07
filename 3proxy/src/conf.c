@@ -1,0 +1,2113 @@
+/*
+   3APA3A simplest proxy server
+   (c) 2002-2026 by Vladimir Dubrovin <vlad@3proxy.org>
+
+   please read License Agreement
+
+*/
+
+#include "proxy.h"
+#include "mdhash.h"
+#ifdef WITH_SSL
+void ssl_install(void);
+#endif
+#ifdef WITH_PCRE
+void pcre_install(void);
+#endif
+#ifndef _WIN32
+#include <sys/resource.h>
+#include <pwd.h>
+#include <grp.h>
+#ifndef NOPLUGINS
+#include <dlfcn.h>
+#endif
+#endif
+
+#ifndef DEFAULTCONFIG
+#define DEFAULTCONFIG conf.stringtable[25]
+#endif
+
+_3proxy_mutex_t bandlim_mutex;
+_3proxy_mutex_t connlim_mutex;
+_3proxy_mutex_t tc_mutex;
+_3proxy_mutex_t config_mutex;
+
+int haveerror = 0;
+int linenum = 0;
+
+FILE *writable;
+struct counter_header cheader = {"3CF", (time_t)0};
+struct counter_record crecord;
+
+int mainfunc (int argc, char** argv);
+
+struct proxydef childdef = {NULL, 0, 0, S_NOSERVICE, ""};
+
+#define STRINGBUF 65535
+#define NPARAMS	  4096
+
+#ifndef _WIN32
+char *chrootp = NULL;
+static pthread_attr_t pa;
+#endif
+char * curconf = NULL;
+
+FILE * confopen(){
+	curconf = conf.conffile;
+#ifndef _WIN32
+	if(chrootp){
+		if(strstr(curconf, chrootp) == curconf)
+			curconf += strlen(chrootp);
+	}
+#endif
+	if(writable) {
+		rewind(writable);
+		return writable;
+	}
+	return fopen(curconf, "r");
+}
+
+
+#ifdef _WIN32
+DWORD WINAPI startsrv(LPVOID data) {
+#else
+void * startsrv(void * data) {
+#endif
+  struct child *d = (struct child *)data;
+  mainfunc(d->argc, (char **)d->argv);
+  return 0;
+}
+
+int included =0;
+
+int getrotate(char c){
+	switch(c){
+	case 'c':
+	case 'C':
+		return MINUTELY;
+	case 'h':
+	case 'H':
+		return HOURLY;
+	case 'd':
+	case 'D':
+		return DAILY;
+	case 'w':
+	case 'W':
+		return WEEKLY;
+	case 'y':
+	case 'Y':
+		return ANNUALLY;
+	case 'm':
+	case 'M':
+		return MONTHLY;
+	default:
+		return NEVER;
+	}
+}
+
+
+unsigned char * dologname (unsigned char *buf, unsigned char *name, const unsigned char *ext, ROTATION lt, time_t t) {
+	struct tm *ts;
+	static const char * const rot_fmt[] = {
+		[NONE]     = "%s",
+		[ANNUALLY] = "%s.%04d",
+		[MONTHLY]  = "%s.%04d.%02d",
+		[DAILY]    = "%s.%04d.%02d.%02d",
+		[HOURLY]   = "%s.%04d.%02d.%02d-%02d",
+		[MINUTELY] = "%s.%04d.%02d.%02d-%02d.%02d",
+	};
+
+	ts = localtime(&t);
+	if(strlen((char *)name) >= 4096){
+	    *buf = 0;
+	    return buf;
+	}
+	if(strchr((char *)name, '%')){
+		dobuf2(NULL, buf, NULL, NULL, ts, (char *)name);
+	}
+	else if(lt == WEEKLY){
+		t = t - (ts->tm_wday * (60*60*24));
+		ts = localtime(&t);
+		sprintf((char *)buf, "%s.%04d.%02d.%02d", name, ts->tm_year+1900, ts->tm_mon+1, ts->tm_mday);
+	}
+	else if((unsigned)lt < sizeof(rot_fmt)/sizeof(rot_fmt[0]) && rot_fmt[lt]){
+		sprintf((char *)buf, rot_fmt[lt], name, ts->tm_year+1900, ts->tm_mon+1, ts->tm_mday, ts->tm_hour, ts->tm_min);
+	}
+	if(ext){
+		strcat((char *)buf, ".");
+		strcat((char *)buf, (char *)ext);
+	}
+	return buf;
+}
+
+int start_proxy_thread(struct child * chp){
+  pthread_t thread;
+#ifdef _WIN32
+  HANDLE h;
+#endif
+
+	_3proxy_sem_lock(conf.threadinit);
+#ifdef _WIN32
+#ifndef _WINCE
+	h = (HANDLE)_beginthreadex((LPSECURITY_ATTRIBUTES )NULL, 16384+conf.stacksize, (void *)startsrv, (void *) chp, (DWORD)0, &thread);
+#else
+	h = (HANDLE)CreateThread((LPSECURITY_ATTRIBUTES )NULL, 16384+conf.stacksize, (void *)startsrv, (void *) chp, (DWORD)0, &thread);
+#endif
+	if(h)CloseHandle(h);
+#else
+	pthread_attr_init(&pa);
+	pthread_attr_setstacksize(&pa,threadstacksize(conf.stacksize));
+	pthread_attr_setdetachstate(&pa,PTHREAD_CREATE_DETACHED);
+	pthread_create(&thread, &pa, startsrv, (void *)chp);
+	pthread_attr_destroy(&pa);
+#endif
+	_3proxy_sem_lock(conf.threadinit);
+	_3proxy_sem_unlock(conf.threadinit);
+	if(haveerror)  {
+		fprintf(stderr, "Service not started on line: %d%s\n", linenum, haveerror == 2? ": insufficient memory":"");
+		return(40);
+	}
+	return 0;
+}
+
+static int h_proxy(int argc, unsigned char ** argv){
+  struct child ch;
+
+	ch.argc = argc;
+	ch.argv = argv;
+	if(!strcmp((char *)argv[0], "proxy")) {
+		childdef.pf = proxychild;
+		childdef.port = 3128;
+		childdef.isudp = 0;
+		childdef.service = S_PROXY;
+#ifdef NOIPV6
+		if(!resolvfunc || (resolvfunc == myresolver && !dns_table.poolsize)){
+			fprintf(stderr, "[line %d] Warning: no nserver/nscache configured, proxy may run very slow\n", linenum);
+		}
+#endif
+	}
+	else if(!strcmp((char *)argv[0], "pop3p")) {
+		childdef.pf = pop3pchild;
+		childdef.port = 110;
+		childdef.isudp = 0;
+		childdef.service = S_POP3P;
+		childdef.helpmessage = " -hdefault_host[:port] - use this host and port as default if no host specified\n -x - disable STARTTLS\n";
+	}
+	else if(!strcmp((char *)argv[0], "imapp")) {
+		childdef.pf = imappchild;
+		childdef.port = 143;
+		childdef.isudp = 0;
+		childdef.service = S_IMAPP;
+		childdef.helpmessage = " -hdefault_host[:port] - use this host and port as default if no host specified\n -x - disable STARTTLS\n";
+	}
+	else if(!strcmp((char *)argv[0], "smtpp")) {
+		childdef.pf = smtppchild;
+		childdef.port = 587;
+		childdef.isudp = 0;
+		childdef.service = S_SMTPP;
+		childdef.helpmessage = " -hdefault_host[:port] - use this host and port as default if no host specified\n -x - disable STARTTLS\n";
+	}
+	else if(!strcmp((char *)argv[0], "ftppr")) {
+		childdef.pf = ftpprchild;
+		childdef.port = 21;
+		childdef.isudp = 0;
+		childdef.service = S_FTPPR;
+		childdef.helpmessage = " -hdefault_host[:port] - use this host and port as default if no host specified\n";
+	}
+	else if(!strcmp((char *)argv[0], "socks")) {
+		childdef.pf = sockschild;
+		childdef.port = 1080;
+		childdef.isudp = 0;
+		childdef.service = S_SOCKS;
+#ifdef NOIPV6
+		if(!resolvfunc || (resolvfunc == myresolver && !dns_table.poolsize)){
+			fprintf(stderr, "[line %d] Warning: no nserver/nscache configured, socks may run very slow\n", linenum);
+		}
+#endif
+	}
+	else if(!strcmp((char *)argv[0], "auto")) {
+		childdef.pf = autochild;
+		childdef.port = 8080;
+		childdef.isudp = 0;
+		childdef.service = S_AUTO;
+		childdef.helpmessage = "";
+	}
+	else if(!strcmp((char *)argv[0], "tcppm")) {
+		childdef.pf = tcppmchild;
+		childdef.port = 0;
+		childdef.isudp = 0;
+		childdef.service = S_TCPPM;
+		childdef.helpmessage = "";
+	}
+	else if(!strcmp((char *)argv[0], "tlspr")) {
+		childdef.pf = tlsprchild;
+		childdef.port = 1443;
+		childdef.isudp = 0;
+		childdef.service = S_TLSPR;
+		childdef.helpmessage = "";
+	}
+	else if(!strcmp((char *)argv[0], "udppm")) {
+		childdef.pf = udppmchild;
+		childdef.port = 0;
+		childdef.isudp = 1;
+		childdef.service = S_UDPPM;
+		childdef.helpmessage = " -s single packet UDP service for request/reply (DNS-like) services\n";
+	}
+	else if(!strcmp((char *)argv[0], "admin")) {
+		childdef.pf = adminchild;
+		childdef.port = 80;
+		childdef.isudp = 0;
+		childdef.service = S_ADMIN;
+	}
+	else if(!strcmp((char *)argv[0], "dnspr")) {
+		childdef.pf = dnsprchild;
+		childdef.port = 53;
+		childdef.isudp = 1;
+		childdef.service = S_DNSPR;
+		childdef.helpmessage = " -s - simple DNS forwarding - do not use 3proxy resolver / name cache\n -Fip - fake: answer all A queries with this IP\n";
+#ifndef NOIPV6
+		if(!resolvfunc || (resolvfunc == myresolver && !dns_table.poolsize) || resolvfunc == fakeresolver){
+			fprintf(stderr, "[line %d] Warning: no nserver/nscache configured, dnspr will not work as expected\n", linenum);
+		}
+#endif
+	}
+	return start_proxy_thread(&ch);
+}
+
+static int h_internal(int argc, unsigned char ** argv){
+#ifdef WITH_UN
+	if(!strncmp((char *)argv[1], "unix:", 5)){
+		make_un(argv[1] +5, (struct sockaddr_un *)&conf.intsa);
+	}
+	else
+#endif
+		getip46(46, argv[1], (struct sockaddr *)&conf.intsa);
+	return 0;
+}
+
+static int h_external(int argc, unsigned char ** argv){
+	int res;
+#ifndef NOIPV6
+	PROXYSOCKADDRTYPE sa6;
+	memset(&sa6, 0, sizeof(sa6));
+	res = getip46(46, argv[1], (struct sockaddr *)&sa6);
+	if(!res) return 1;
+	if (*SAFAMILY(&sa6)==AF_INET) conf.extsa = sa6;
+	else conf.extsa6 = sa6;
+#else
+	res = getip46(46, argv[1], (struct sockaddr *)&conf.extsa);
+	if(!res) return 1;
+#endif
+	return 0;
+}
+
+
+/* ODBC drivers require noticeably more stack than the file logger, raise
+   the client thread stack size unless a larger one is configured
+   explicitly. An explicit stacksize placed after the log command still wins.
+ */
+#define LOGSTACKSIZE 32768
+
+static int h_log(int argc, unsigned char ** argv){
+	unsigned char tmpbuf[8192];
+	int notchanged = 0;
+
+
+	havelog = 1;
+	if(argc > 1 && conf.logtarget && !strcmp((char *)conf.logtarget, (char *)argv[1])) {
+		notchanged = 1;
+	}
+	if(!notchanged && conf.logtarget){
+		free(conf.logtarget);
+		conf.logtarget = NULL;
+	}
+	if(argc > 1) {
+		if(!strcmp((char *) argv[1], "/dev/null")) {
+			conf.logfunc = lognone;
+			return 0;
+		}
+		if(!notchanged) conf.logtarget = (unsigned char *)strdup((char *)argv[1]);
+		if(*argv[1]=='@'){
+#ifndef _WIN32
+			conf.logfunc = logsyslog;
+			if(notchanged) return 0;
+			openlog((char *)conf.logtarget+1, LOG_PID, LOG_DAEMON);
+#endif
+		}
+#ifdef WITH_ODBC
+		else if(*argv[1]=='&'){
+			conf.logfunc = logsql;
+			if(conf.stacksize < LOGSTACKSIZE) conf.stacksize = LOGSTACKSIZE;
+			if(notchanged) return 0;
+			_3proxy_mutex_lock(&log_mutex);
+			close_sql();
+			init_sql((char *)argv[1]+1);
+			_3proxy_mutex_unlock(&log_mutex);
+		}
+#endif
+#ifndef NORADIUS
+		else if(!strcmp((char *)argv[1],"radius")){
+			conf.logfunc = logradius;
+		}
+#endif
+		else {
+			if(argc > 2) {
+				conf.logtype = getrotate(*argv[2]);
+			}
+			conf.logfunc = logstdout;
+			if(notchanged) return 0;
+			conf.logtime = time(0);
+			if(conf.logname)free(conf.logname);
+			conf.logname = (unsigned char *)strdup((char *)argv[1]);
+			if(conf.stdlog) conf.stdlog = freopen((char *)dologname (tmpbuf, conf.logname, NULL, conf.logtype, conf.logtime), "a", conf.stdlog);
+			else conf.stdlog = fopen((char *)dologname (tmpbuf, conf.logname, NULL, conf.logtype, conf.logtime), "a");
+			if(!conf.stdlog){
+				perror((char *)tmpbuf);
+				return 1;
+			}
+
+		}
+	}
+	else conf.logfunc = logstdout;
+	return 0;
+}
+
+static int h_stacksize(int argc, unsigned char **argv){
+	conf.stacksize = atoi((char *)argv[1]);
+	return 0;
+}
+
+
+static int h_force(int argc, unsigned char **argv){
+	conf.noforce = 0;
+	return 0;
+}
+
+static int h_noforce(int argc, unsigned char **argv){
+	conf.noforce = 1;
+	return 0;
+}
+
+static int h_service(int argc, unsigned char **argv){
+	return 0;
+}
+
+static int h_daemon(int argc, unsigned char **argv){
+	if(!conf.demon)daemonize();
+	conf.demon = 1;
+	return 0;
+}
+
+static int h_config(int argc, unsigned char **argv){
+	if(conf.conffile)free(conf.conffile);
+	conf.conffile = strdup((char *)argv[1]);
+	if(!conf.conffile) return 21;
+	return 0;
+}
+
+static int h_include(int argc, unsigned char **argv){
+	int res;
+	FILE *fp1;
+
+	fp1 = fopen((char *)argv[1], "r");
+	if(!fp1){
+		fprintf(stderr, "Unable to open included file: %s\n", argv[1]);
+		return 1;
+	}
+	res = readconfig(fp1);
+	fclose(fp1);
+	return res;
+}
+
+static int h_archiver(int argc, unsigned char **argv){
+	int j;
+
+	conf.archiver = malloc(argc * sizeof(char *));
+	if(conf.archiver) {
+		conf.archiverc = argc;
+		for(j = 0; j < conf.archiverc; j++) conf.archiver[j] = (unsigned char *)strdup((char *)argv[j]);
+	}
+	return 0;
+}
+
+static int h_counter(int argc, unsigned char **argv){
+	struct counter_header ch1;
+	if(conf.counterd >=0)close(conf.counterd);
+	conf.counterd = open((char *)argv[1], O_BINARY|O_RDWR|O_CREAT, 0660);
+	if(conf.counterd<0){
+		fprintf(stderr, "Unable to open counter file %s, line %d\n", argv[1], linenum);
+		return 1;
+	}
+	if(read(conf.counterd, &ch1, sizeof(ch1))==sizeof(ch1)){
+		if(memcmp(&ch1, &cheader, 4)){
+			fprintf(stderr, "Not a counter file %s, line %d\n", argv[1], linenum);
+			return 2;
+		}
+		if(ch1.updated < 0 || ch1.updated >= MAX_COUNTER_TIME){
+			fprintf(stderr, "Invalid or corrupted counter file %s. Use countersutil utility to convert from older version\n", argv[1]);
+			return 3;
+		}
+		cheader.updated = ch1.updated;
+	}
+	if(argc >=4) {
+		conf.countertype = getrotate(*argv[2]);
+		if(conf.counterfile) free(conf.counterfile);
+		conf.counterfile = strdup((char *)argv[3]);
+	}
+	return 0;
+}
+
+static int h_rotate(int argc, unsigned char **argv){
+	conf.rotate = atoi((char *)argv[1]);
+	return 0;
+}
+
+static int h_maxseg(int argc, unsigned char **argv){
+	conf.maxseg = atoi((char *)argv[1]);
+	return 0;
+}
+
+static int h_logformat(int argc, unsigned char **argv){
+	unsigned char * old = conf.logformat;
+	conf.logformat = (unsigned char *)strdup((char *)argv[1]);
+	if(old) free(old);
+	return 0;
+}
+
+static int h_timeouts(int argc, unsigned char **argv){
+	int j;
+
+	for(j = 0; conf.timeouts[j] && j + 1 < argc; j++) {
+		if((conf.timeouts[j] = atoi((char *)argv[j + 1])) <= 0 || conf.timeouts[j] > 2000000){
+			fprintf(stderr, "Invalid timeout: %s, line %d\n", argv[j + 1], linenum);
+			return(1);
+		}
+	}
+	return 0;
+}
+
+static int h_noop(int argc, unsigned char **argv){
+	return 0;
+}
+
+static int h_auth(int argc, unsigned char **argv){
+	struct auth *au, * newau;
+	
+	freeauth(conf.authfuncs);
+	conf.authfuncs = NULL;
+	if(!conf.bandlimfunc)conf.bandlimfunc = bandlimitfunc;
+	for(argc--; argc; argc--){
+	  for(au = authfuncs; au; au=au->next){
+		if(!strcmp((char *)argv[argc], au->desc)){
+			newau = malloc(sizeof(struct auth));
+			if(!newau) {
+				return 21;
+			}
+			newau->next = conf.authfuncs;
+			conf.authfuncs = newau;
+			conf.authfuncs->desc = au->desc;
+			conf.authfuncs->authenticate = au->authenticate;
+			conf.authfuncs->authorize = au->authorize;
+			break;
+		}
+	  }
+	  if(!au) return 1;
+	}
+	conf.authfunc = doauth;
+	return 0;
+}
+
+static int h_users(int argc, unsigned char **argv){
+    int j;
+    unsigned char *arg;
+    char *pw[2];
+    char pass[256];
+    int l;
+
+    for (j = 1; j < argc; j++) {
+        arg = (unsigned char *)strchr((char *)argv[j], ':');
+        if (!arg) continue;
+        *arg = 0;
+        pw[0] = (char *)argv[j];
+
+        if (!pwl_table.ihashtable && inithashtable(&pwl_table, 16, 32, 1048576))
+                    return 3;
+	memset(pass, 0, sizeof(pass));
+        if (arg[1] && arg[2] && arg[3] == ':') {
+            pw[1] = (char *)(arg + 4);
+            if (arg[1] == 'N' && arg[2] == 'T') {
+#ifdef WITH_SSL
+		*pass = NT;
+#else
+                continue;
+#endif
+            }
+            else if (arg[1] == 'C' && arg[2] == 'R') {
+		*pass = CR;
+            }
+            else if (arg[1] == 'C' && arg[2] == 'L') {
+		*pass = CL;
+            } else {
+                continue;
+            }
+        } else {
+    	    *pass = CL;
+            pw[1] = (char *)(arg + 1);
+        }
+	l = strlen(pw[1]);
+	if(l > 255) l = 255;
+	if((unsigned)l >= pwl_table.recsize) {
+	    mdh_ctx *bctx;
+	    unsigned hashsz;
+	    unsigned int blen;
+	    if(*pass != CL) continue;
+	    hashsz = pwl_table.recsize - 1 < 64 ? pwl_table.recsize - 1 : 64;
+	    bctx = mdh_init(MDH_BLAKE2, hashsz);
+	    if(!bctx) continue;
+	    mdh_update(bctx, pw[1], l + 1);
+	    blen = hashsz;
+	    mdh_final(bctx, (unsigned char *)pass+1, &blen);
+	    mdh_free(bctx);
+	} else {
+	    memcpy(pass + 1, pw[1], l);
+	}
+        hashadd(&pwl_table, pw[0], pass, MAX_COUNTER_TIME);
+    }
+    return 0;
+}
+
+static int h_maxconn(int argc, unsigned char **argv){
+	conf.maxchild = atoi((char *)argv[1]);
+	if(!conf.maxchild) {
+		return(1);
+	}
+#ifndef _WIN32
+	{
+		struct rlimit rl;
+		if(!getrlimit(RLIMIT_NOFILE, &rl)){
+			if((conf.maxchild<<1) > rl.rlim_cur)
+				fprintf(stderr, "[line %d] Warning: current open file ulimits are too low (cur: %d/max: %d),"
+						" maxconn requires at least %d for every running service."
+						" Configure ulimits according to system documentation\n",
+						  linenum, (int)rl.rlim_cur, (int)rl.rlim_max, (conf.maxchild<<1));
+		}
+	}
+#endif
+	return 0;
+}
+
+static int h_backlog(int argc, unsigned char **argv){
+	conf.backlog = atoi((char *)argv[1]);
+	if(conf.backlog < 0) {
+		return(1);
+	}
+	return 0;
+}
+
+static int h_flush(int argc, unsigned char **argv){
+	freeacl(conf.acl);
+	conf.acl = NULL;
+	return 0;
+}
+
+/*
+static int h_flushusers(int argc, unsigned char **argv){
+	freepwl(conf.pwl);
+	conf.pwl = NULL;
+	return 0;
+}
+*/
+
+static int h_nserver(int argc, unsigned char **argv){
+  char *str;
+
+	if(numservers < MAXNSERVERS) {
+		if((str = strchr((char *)argv[1], '/')))
+			*str = 0;
+		*SAPORT(&nservers[numservers].addr) = htons(53);
+		if(parsehost(46, argv[1], (struct sockaddr *)&nservers[numservers].addr)) return 1;
+		if(str) {
+			nservers[numservers].usetcp = strstr(str + 1, "tcp")? 1:0;
+			*str = '/';
+		}
+		numservers++;
+
+	}
+	resolvfunc = myresolver;
+	return 0;
+}
+
+static int h_authnserver(int argc, unsigned char **argv){
+  char *str;
+
+	if((str = strchr((char *)argv[1], '/')))
+		*str = 0;
+	if(parsehost(46, argv[1], (struct sockaddr *)&authnserver.addr)) return 1;
+	*SAPORT(&authnserver.addr) = htons(53);
+	if(str) {
+		authnserver.usetcp = strstr(str + 1, "tcp")? 1:0;
+		*str = '/';
+	}
+	return 0;
+}
+
+static int h_fakeresolve(int argc, unsigned char **argv){
+	resolvfunc = fakeresolver;
+	return 0;
+}
+
+static int h_nscache(int argc, unsigned char **argv){
+  unsigned res;
+
+	res = (unsigned)atoi((char *)argv[1]);
+	if(res < 256) {
+		fprintf(stderr, "Invalid NS cache size: %d\n", res);
+		return 1;
+	}
+	if(dns_table.growlimit != res && inithashtable(&dns_table, (res >> 2), (res >> 2), res)){
+		fprintf(stderr, "Failed to initialize NS cache\n");
+		return 2;
+	}
+	return 0;
+}
+
+static int h_parentretries(int argc, unsigned char **argv){
+  int res;
+
+	res = atoi((char *)argv[1]);
+	if(res > 0) conf.parentretries = res;
+	return 0;
+}
+
+static int h_nscache6(int argc, unsigned char **argv){
+  unsigned res;
+
+	res = (unsigned)atoi((char *)argv[1]);
+	if(res < 256) {
+		fprintf(stderr, "Invalid NS cache size: %d\n", res);
+		return 1;
+	}
+	if(dns6_table.growlimit != res &&inithashtable(&dns6_table, (res>>2), (res>>2), res)){
+		fprintf(stderr, "Failed to initialize NS cache\n");
+		return 2;
+	}
+	return 0;
+}
+
+static int h_nsrecord(int argc, unsigned char **argv){
+	PROXYSOCKADDRTYPE sa;
+	memset(&sa, 0, sizeof(sa));
+	if(!getip46(46, argv[2], (struct sockaddr *)&sa)) return 1;
+
+	hashadd(*SAFAMILY(&sa)==AF_INET6?&dns6_table:&dns_table, argv[1], SAADDR(&sa), (time_t)0xffffffff);
+	return 0;
+}
+
+static int h_dialer(int argc, unsigned char **argv){
+	if(conf.demanddialprog) free(conf.demanddialprog);
+	conf.demanddialprog = strdup((char *)argv[1]);
+	return 0;
+}
+
+static int h_system(int argc, unsigned char **argv){
+  int res;
+
+	if((res = system((char *)argv[1])) == -1){
+		fprintf(stderr, "Failed to start %s\n", argv[1]);
+		return(1);
+	}
+	return 0;
+}
+
+static int h_pidfile(int argc, unsigned char **argv){
+  FILE *pidf;
+
+	if(!(pidf = fopen((char *)argv[1], "w"))){
+		fprintf(stderr, "Failed to open pid file %s\n", argv[1]);
+		return(1);
+	}
+	fprintf(pidf,"%u", (unsigned)getpid());
+	fclose(pidf);
+	return 0;
+}
+
+static int h_monitor(int argc, unsigned char **argv){
+  struct filemon * fm;
+
+	fm = malloc(sizeof (struct filemon));
+	if(!fm) return 21;
+	if(stat((char *)argv[1], &fm->sb)){
+		free(fm);
+		fprintf(stderr, "Warning: file %s doesn't exist on line %d\n", argv[1], linenum);
+	}
+	else {
+		fm->path = strdup((char *)argv[1]);
+		if(!fm->path) return 21;
+		fm->next = conf.fmon;
+		conf.fmon = fm;
+	}
+	return 0;
+}
+
+
+struct redirdesc redirs[] = {
+    {R_TCP, "tcp", tcppmchild},
+    {R_CONNECT, "connect", proxychild},
+    {R_SOCKS4, "socks4", sockschild},
+    {R_SOCKS5, "socks5", sockschild},
+    {R_HTTP, "http", proxychild},
+    {R_POP3, "pop3", pop3pchild},
+    {R_IMAP, "imap", imappchild},
+    {R_SMTP, "smtp", smtppchild},
+    {R_FTP, "ftp", ftpprchild},
+    {R_CONNECTP, "connect+", proxychild},
+    {R_SOCKS4P, "socks4+", sockschild},
+    {R_SOCKS5P, "socks5+", sockschild},
+    {R_SOCKS4B, "socks4b", sockschild},
+    {R_SOCKS5B, "socks5b", sockschild},
+    {R_ADMIN, "admin", adminchild},
+    {R_EXTIP, "extip", NULL},
+    {R_TLS, "tls", tlsprchild},
+    {R_HA, "ha", NULL},
+    {R_DNS, "dns", dnsprchild},
+    {0, NULL, NULL}
+};
+
+static int h_parent(int argc, unsigned char **argv){
+  struct ace *acl = NULL;
+  struct chain *chains;
+  char * cidr = NULL;
+  int i;
+
+	acl = conf.acl;
+	while(acl && acl->next) acl = acl->next;
+	if(!acl || (acl->action && acl->action != 2)) {
+		fprintf(stderr, "Chaining error: last ACL entry was not \"allow\" or \"redirect\" on line %d\n", linenum);
+		return(1);
+	}
+	acl->action = 2;
+
+	chains = malloc(sizeof(struct chain));
+	if(!chains){
+		return(21);
+	}
+	memset(chains, 0, sizeof(struct chain));
+	chains->weight = (unsigned)atoi((char *)argv[1]);
+	if(chains->weight == 0 || chains->weight >1000) {
+		fprintf(stderr, "Chaining error: bad chain weight %u line %d\n", chains->weight, linenum);
+		free(chains);
+		return(3);
+	}
+	for(i = 0; redirs[i].name ; i++){
+	    int len;
+	    len = strlen(redirs[i].name);
+	    if(!strncmp((char *)argv[2], redirs[i].name, len)
+		&& (argv[2][len] == 0 || (argv[2][len] == 's' && argv[2][len+1] == 0))
+	    ) {
+		chains->type = redirs[i].redir;
+		if(argv[2][len] == 's') chains->secure = 1;
+		break;
+	    }
+	}
+	if(!redirs[i].name) {
+		fprintf(stderr, "Chaining error: bad chain type (%s)\n", argv[2]);
+		free(chains);
+		return(4);
+	}
+#ifdef WITH_UN
+	if(!strncmp((char *)argv[3], "unix:", 5)){
+	    make_un(argv[3] + 5, (struct sockaddr_un*)&chains->addr);
+	}
+	else {
+#endif
+	cidr = strchr((char *)argv[3], '/');
+	if(cidr) *cidr = 0;
+	if(!getip46(46, argv[3], (struct sockaddr *)&chains->addr)) {
+		free(chains);
+		return (5);
+	}
+#ifdef WITH_UN
+	}
+#endif
+	chains->exthost = (unsigned char *)strdup((char *)argv[3]);
+	if(!chains->exthost) {
+		free(chains);
+		return 21;
+	}
+	if(cidr){
+		*cidr = '/';
+		chains->cidr = atoi(cidr + 1);
+	}
+	*SAPORT(&chains->addr) = htons((uint16_t)atoi((char *)argv[4]));
+	switch(chains->type){
+	    case R_POP3:
+	    case R_SMTP:
+	    case R_FTP:
+	    case R_ADMIN:
+	    case R_TLS:
+	    case R_DNS:
+	    case R_HA:
+		if(!SAISNULL(&chains->addr) || *SAPORT(&chains->addr)){
+			fprintf(stderr, "Chaining error: chain type (%s) is a local redirection, it requires 0.0.0.0 as address and 0 as port on line %d\n", argv[2], linenum);
+			free(chains->exthost);
+			free(chains);
+			return(4);
+		}
+		break;
+	    default:
+		break;
+	}
+	if(argc > 5) chains->extuser = (unsigned char *)strdup((char *)argv[5]);
+	if(argc > 6) chains->extpass = (unsigned char *)strdup((char *)argv[6]);
+	if(!acl->chains) {
+		acl->chains = chains;
+	}
+	else {
+		struct chain *tmpchain;
+
+		for(tmpchain = acl->chains; tmpchain->next; tmpchain = tmpchain->next);
+		tmpchain->next = chains;
+	}
+	return 0;
+	
+}
+
+static int h_nolog(int argc, unsigned char **argv){
+  struct ace *acl = NULL;
+
+	acl = conf.acl;
+	if(!acl) {
+		fprintf(stderr, "Chaining error: last ACL entry was not \"allow/deny\" on line %d\n", linenum);
+		return(1);
+	}
+	while(acl->next) acl = acl->next;
+	if(argc == 1) acl->nolog = 1;
+	else acl->weight = atoi((char*)argv[1]);
+	return 0;
+}
+
+int scanipl(unsigned char *arg, struct iplist *dst){
+	PROXYSOCKADDRTYPE sa;
+        char * slash, *dash;
+	int masklen, addrlen;
+	int res;
+
+	if((slash = strchr((char *)arg, '/'))) *slash = 0;
+	if((dash = strchr((char *)arg,'-'))) *dash = 0;
+	
+	if(afdetect(arg) == -1) {
+		if(slash)*slash = '/';
+		if(dash)*dash = '-';
+		return 1;
+	}
+	res = getip46(46, arg, (struct sockaddr *)&sa);
+	if(dash)*dash = '-';
+	if(!res) return 1;
+	memcpy(&dst->ip_from, SAADDR(&sa), SAADDRLEN(&sa));
+	dst->family = *SAFAMILY(&sa);
+	if(dash){
+		if(afdetect((unsigned char *)dash+1) == -1) return 1;
+		if(!getip46(46, (unsigned char *)dash+1, (struct sockaddr *)&sa)) return 2;
+		memcpy(&dst->ip_to, SAADDR(&sa), SAADDRLEN(&sa));
+		if(*SAFAMILY(&sa) != dst->family || memcmp(&dst->ip_to, &dst->ip_from, SAADDRLEN(&sa)) < 0) return 3;
+		return 0;
+	}
+	memcpy(&dst->ip_to, &dst->ip_from, SAADDRLEN(&sa));
+	if(slash){
+		*slash = '/';
+		addrlen = SAADDRLEN(&sa);
+		masklen = atoi(slash+1);
+		if(masklen < 0 || masklen > (addrlen*8)) return 4;
+		else {
+			int i, nbytes = masklen / 8, nbits = (8 - (masklen % 8)) % 8;
+
+			for(i = addrlen; i>(nbytes + (nbits > 0)); i--){
+				((unsigned char *)&dst->ip_from)[i-1] = 0x00;
+				((unsigned char *)&dst->ip_to)[i-1] = 0xff;
+			}
+			for(;nbits;nbits--){
+				((unsigned char *)&dst->ip_from)[nbytes] &= ~(0x01<<(nbits-1));
+				((unsigned char *)&dst->ip_to)[nbytes] |= (0x01<<(nbits-1));
+			}
+			return 0;
+		}
+	}		
+	return 0;
+}
+
+struct ace * make_ace (int argc, unsigned char ** argv){
+	struct ace * acl;
+	unsigned char *arg;
+	struct iplist *ipl=NULL;
+	struct portlist *portl=NULL;
+	struct userlist *userl=NULL;
+	struct hostname *hostnamel=NULL;
+	int res;
+
+	acl = malloc(sizeof(struct ace));
+	if(!acl) return acl;
+	memset(acl, 0, sizeof(struct ace));
+		if(argc > 0 && strcmp("*", (char *)argv[0])) {
+			arg = argv[0];
+			arg = (unsigned char *)strtok((char *)arg, ",");
+			if(arg) do {
+				if(!acl->users) {
+					acl->users = userl = malloc(sizeof(struct userlist));
+				}
+				else {
+					userl->next = malloc(sizeof(struct userlist));
+					userl = userl -> next;
+				}
+				if(!userl) {
+					fprintf(stderr, "No memory for ACL entry, line %d\n", linenum);
+					return(NULL);
+				}
+				memset(userl, 0, sizeof(struct userlist));
+				userl->user=(unsigned char*)strdup((char *)arg);
+				if(!userl->user) return NULL;
+			} while((arg = (unsigned char *)strtok((char *)NULL, ",")));
+		}
+		if(argc > 1  && strcmp("*", (char *)argv[1])) {
+			arg = (unsigned char *)strtok((char *)argv[1], ",");
+			if(arg) do {
+				if(!acl->src) {
+					acl->src = ipl = malloc(sizeof(struct iplist));
+				}
+				else {
+					ipl->next = malloc(sizeof(struct iplist));
+					ipl = ipl -> next;
+				}
+				if(!ipl) {
+					fprintf(stderr, "No memory for ACL entry, line %d\n", linenum);
+					return(NULL);
+				}
+				memset(ipl, 0, sizeof(struct iplist));
+				if (scanipl(arg, ipl)) {
+					fprintf(stderr, "Invalid IP, IP range or CIDR, line %d\n", linenum);
+					return(NULL);
+				}
+			} while((arg = (unsigned char *)strtok((char *)NULL, ",")));
+		}
+		if(argc > 2 && strcmp("*", (char *)argv[2])) {
+			arg = (unsigned char *)strtok((char *)argv[2], ",");
+			if(arg) do {
+			 int arglen;
+			 unsigned char *pattern;
+			 struct iplist tmpip={NULL};
+			 
+			 arglen = (int)strlen((char *)arg);
+			 if(scanipl(arg, &tmpip)){
+				if(!arglen) continue;
+				if(!acl->dstnames) {
+					acl->dstnames = hostnamel = malloc(sizeof(struct hostname));
+				}
+				else {
+					hostnamel->next = malloc(sizeof(struct hostname));
+					hostnamel = hostnamel -> next;
+				}
+				if(!hostnamel){
+					fprintf(stderr, "No memory for ACL entry, line %d\n", linenum);
+					return(NULL);
+				}
+				memset(hostnamel, 0, sizeof(struct hostname));
+				hostnamel->matchtype = 3;
+				pattern = arg;
+				if(pattern[arglen-1] == '*'){
+					arglen --;
+					pattern[arglen] = 0;
+					hostnamel->matchtype ^= MATCHEND;
+				}
+				if(pattern[0] == '*'){
+					pattern++;
+					arglen--;
+					hostnamel->matchtype ^= MATCHBEGIN;
+				}
+				hostnamel->name = (unsigned char *) strdup( (char *)pattern);
+				if(!hostnamel->name) {
+					fprintf(stderr, "No memory for ACL entry, line %d\n", linenum);
+					return(NULL);
+				}
+			 }
+			 else {
+				
+				if(!acl->dst) {
+					acl->dst = ipl = malloc(sizeof(struct iplist));
+				}
+				else {
+					ipl->next = malloc(sizeof(struct iplist));
+					ipl = ipl -> next;
+				}
+				if(!ipl) {
+					fprintf(stderr, "No memory for ACL entry, line %d\n", linenum);
+					return(NULL);
+				}
+				*ipl = tmpip;
+			 }
+			}while((arg = (unsigned char *)strtok((char *)NULL, ",")));
+		}
+		if(argc > 3 && strcmp("*", (char *)argv[3])) {
+			arg = (unsigned char *)strtok((char *)argv[3], ",");
+			if(arg) do {
+				if(!acl->ports) {
+					acl->ports = portl = malloc(sizeof(struct portlist));
+				}
+				else {
+					portl->next = malloc(sizeof(struct portlist));
+					portl = portl -> next;
+				}
+				if(!portl) {
+					fprintf(stderr, "No memory for ACL entry, line %d\n", linenum);
+					return(NULL);
+				}
+				memset(portl, 0, sizeof(struct portlist));
+				res = sscanf((char *)arg, "%hu-%hu", &portl->startport, &portl->endport);
+				if(res < 1) {
+					fprintf(stderr, "Invalid port or port range, line %d\n", linenum);
+					return(NULL);
+				}
+				if (res == 1) portl->endport = portl->startport;
+			} while((arg = (unsigned char *)strtok((char *)NULL, ",")));
+		}
+		if(argc > 4 && strcmp("*", (char *)argv[4])) {
+			arg = (unsigned char *)strtok((char *)argv[4], ",");	
+			if(arg) do {
+				if(!strcmp((char *)arg, "CONNECT")){
+					acl->operation |= CONNECT;
+				}
+				else if(!strcmp((char *)arg, "BIND")){
+					acl->operation |= BIND;
+				}
+				else if(!strcmp((char *)arg, "UDPASSOC")){
+					acl->operation |= UDPASSOC;
+				}
+				else if(!strcmp((char *)arg, "ICMPASSOC")){
+					acl->operation |= ICMPASSOC;
+				}
+				else if(!strcmp((char *)arg, "HTTP_GET")){
+					acl->operation |= HTTP_GET;
+				}
+				else if(!strcmp((char *)arg, "HTTP_PUT")){
+					acl->operation |= HTTP_PUT;
+				}
+				else if(!strcmp((char *)arg, "HTTP_POST")){
+					acl->operation |= HTTP_POST;
+				}
+				else if(!strcmp((char *)arg, "HTTP_HEAD")){
+					acl->operation |= HTTP_HEAD;
+				}
+				else if(!strcmp((char *)arg, "HTTP_OTHER")){
+					acl->operation |= HTTP_OTHER;
+				}
+				else if(!strcmp((char *)arg, "HTTP_CONNECT")){
+					acl->operation |= HTTP_CONNECT;
+				}
+				else if(!strcmp((char *)arg, "HTTP")){
+					acl->operation |= HTTP;
+				}
+				else if(!strcmp((char *)arg, "HTTPS")){
+					acl->operation |= HTTPS;
+				}
+				else if(!strcmp((char *)arg, "FTP_GET")){
+					acl->operation |= FTP_GET;
+				}
+				else if(!strcmp((char *)arg, "FTP_PUT")){
+					acl->operation |= FTP_PUT;
+				}
+				else if(!strcmp((char *)arg, "FTP_LIST")){
+					acl->operation |= FTP_LIST;
+				}
+				else if(!strcmp((char *)arg, "FTP_DATA")){
+					acl->operation |= FTP_DATA;
+				}
+				else if(!strcmp((char *)arg, "FTP")){
+					acl->operation |= FTP;
+				}
+				else if(!strcmp((char *)arg, "ADMIN")){
+					acl->operation |= ADMIN;
+				}
+				else if(!strcmp((char *)arg, "DNSRESOLVE")){
+					acl->operation |= DNSRESOLVE;
+				}
+				else {
+					fprintf(stderr, "Unknown operation type: %s line %d\n", arg, linenum);
+					return(NULL);
+				}
+			} while((arg = (unsigned char *)strtok((char *)NULL, ",")));
+		}
+		if(argc > 5){
+			for(arg = argv[5]; *arg;){
+				int val, val1;
+
+				if(!isnumber(*arg)){
+					arg++;
+					continue;
+				}
+				val1 = val = (*arg - '0');
+				arg++;
+				if(*arg == '-' && isnumber(*(arg+1)) && (*(arg+1) - '0') > val) {
+					val1 = (*(arg+1) - '0');
+					arg+=2;
+				}
+				for(; val<=val1; val++) acl->wdays |= (1 << (val % 7));
+			}
+			
+		}
+		if(argc > 6){
+			for(arg = argv[6]; strlen((char *)arg) >= 17 &&
+							isdigit(arg[0]) &&
+							isdigit(arg[1]) &&
+							isdigit(arg[3]) &&
+							isdigit(arg[4]) &&
+							isdigit(arg[6]) &&
+							isdigit(arg[7]) &&
+							isdigit(arg[9]) &&
+							isdigit(arg[10]) &&
+							isdigit(arg[12]) &&
+							isdigit(arg[13]) &&
+							isdigit(arg[15]) &&
+							isdigit(arg[16])
+							; arg+=18){
+
+				int t1, t2;
+				struct period *sp;
+
+				t1 = (arg[0] - '0') * 10 + (arg[1] - '0');
+				t1 = (t1 * 60) + (arg[3] - '0') * 10 + (arg[4] - '0');
+				t1 = (t1 * 60) + (arg[6] - '0') * 10 + (arg[7] - '0');
+				t2 = (arg[9] - '0') * 10 + (arg[10] - '0');
+				t2 = (t2 * 60) + (arg[12] - '0') * 10 + (arg[13] - '0');
+				t2 = (t2 * 60) + (arg[15] - '0') * 10 + (arg[16] - '0');
+				if(t2 < t1) break;
+				sp = malloc(sizeof(struct period));
+				if(sp){
+					sp->fromtime = t1;
+					sp->totime = t2;
+					sp->next = acl->periods;
+					acl->periods = sp;
+				}
+				if(arg[17]!=',') break;
+			}
+		}
+	if (argc > 7){
+		acl->weight = atoi((char *)argv[7]);
+	}
+
+	return acl;
+}
+
+
+static int h_ace(int argc, unsigned char **argv){
+  int res = 0;
+  int offset = 0;
+  struct ace *acl = NULL;
+  struct bandlim * nbl;
+  struct trafcount * tl;
+  struct connlim * ncl;
+
+	if(!strcmp((char *)argv[0], "allow")){
+		res = ALLOW;
+	}
+	else if(!strcmp((char *)argv[0], "deny")){
+		res = DENY;
+	}
+	else if(!strcmp((char *)argv[0], "redirect")){
+		res = REDIRECT;
+		offset = 2;
+	}
+	else if(!strcmp((char *)argv[0], "bandlimin")||!strcmp((char *)argv[0], "bandlimout")){
+		res = BANDLIM;
+		offset = 1;
+	}
+	else if(!strcmp((char *)argv[0], "nobandlimin")||!strcmp((char *)argv[0], "nobandlimout")){
+		res = NOBANDLIM;
+	}
+	else if(!strcmp((char *)argv[0], "countin")){
+		res = COUNTIN;
+		offset = 3;
+	}
+	else if(!strcmp((char *)argv[0], "nocountin")){
+		res = NOCOUNTIN;
+	}
+	else if(!strcmp((char *)argv[0], "countout")){
+		res = COUNTOUT;
+		offset = 3;
+	}
+	else if(!strcmp((char *)argv[0], "nocountout")){
+		res = NOCOUNTOUT;
+	}
+	else if(!strcmp((char *)argv[0], "countall")){
+		res = COUNTALL;
+		offset = 3;
+	}
+	else if(!strcmp((char *)argv[0], "nocountall")){
+		res = NOCOUNTALL;
+	}
+	else if(!strcmp((char *)argv[0], "connlim")){
+		res = CONNLIM;
+		offset = 2;
+	}
+	else if(!strcmp((char *)argv[0], "noconnlim")){
+		res = NOCONNLIM;
+	}
+	acl = make_ace(argc - (offset+1), argv + (offset + 1));
+	if(!acl) {
+		fprintf(stderr, "Unable to parse ACL entry, line %d\n", linenum);
+		return(1);
+	}
+	acl->action = res;
+	switch(acl->action){
+	case REDIRECT:
+		acl->chains = malloc(sizeof(struct chain));
+		if(!acl->chains) {
+			freeacl(acl);
+			return(21);
+		}
+		memset(acl->chains, 0, sizeof(struct chain));
+		acl->chains->type = R_HTTP;
+		if(!getip46(46, argv[1], (struct sockaddr *)&acl->chains->addr)) {
+			freeacl(acl);
+			return 5;
+		}
+		*SAPORT(&acl->chains->addr) = htons((uint16_t)atoi((char *)argv[2]));
+		acl->chains->weight = 1000;
+	case ALLOW:
+	case DENY:
+		if(!conf.acl){
+			conf.acl = acl;
+		}
+		else {
+			struct ace * acei;
+
+			for(acei = conf.acl; acei->next; acei = acei->next);
+			acei->next = acl;
+		}
+		break;
+	case CONNLIM:
+	case NOCONNLIM:
+		ncl = malloc(sizeof(struct connlim));
+		if(!ncl) {
+			freeacl(acl);
+			return(21);
+		}
+		memset(ncl, 0, sizeof(struct connlim));
+		ncl->ace = acl;
+		if(acl->action == CONNLIM) {
+			sscanf((char *)argv[1], "%u", &ncl->rate);
+			sscanf((char *)argv[2], "%u", &ncl->period);
+		}
+		_3proxy_mutex_lock(&connlim_mutex);
+		if(!conf.connlimiter){
+			conf.connlimiter = ncl;
+		}
+		else {
+			struct connlim * cli;
+
+			for(cli = conf.connlimiter; cli->next; cli = cli->next);
+			cli->next = ncl;
+		}
+		_3proxy_mutex_unlock(&connlim_mutex);			
+		break;
+
+	case BANDLIM:
+	case NOBANDLIM:
+
+		nbl = malloc(sizeof(struct bandlim));
+		if(!nbl) {
+			freeacl(acl);
+			return(21);
+		}
+		memset(nbl, 0, sizeof(struct bandlim));
+		nbl->ace = acl;
+		if(acl->action == BANDLIM) {
+			sscanf((char *)argv[1], "%u", &nbl->rate);
+			if(nbl->rate < 300) {
+				free(nbl);
+				freeacl(acl);
+				fprintf(stderr, "Wrong bandwidth specified, line %d\n", linenum);
+				return(4);
+			}
+		}
+		_3proxy_mutex_lock(&bandlim_mutex);
+		if(!strcmp((char *)argv[0], "bandlimin") || !strcmp((char *)argv[0], "nobandlimin")){
+			if(!conf.bandlimiter){
+				conf.bandlimiter = nbl;
+			}
+			else {
+				struct bandlim * bli;
+
+				for(bli = conf.bandlimiter; bli->next; bli = bli->next);
+				bli->next = nbl;
+			}
+		}
+		else {
+			if(!conf.bandlimiterout){
+				conf.bandlimiterout = nbl;
+			}
+			else {
+				struct bandlim * bli;
+
+				for(bli = conf.bandlimiterout; bli->next; bli = bli->next);
+				bli->next = nbl;
+			}
+		}
+		conf.bandlimver++;
+		_3proxy_mutex_unlock(&bandlim_mutex);			
+		break;
+
+	case COUNTIN:
+	case NOCOUNTIN:
+	case COUNTOUT:
+	case NOCOUNTOUT:
+	case COUNTALL:
+	case NOCOUNTALL:
+		if(!conf.trafcountfunc) conf.trafcountfunc = trafcountfunc;
+		tl = malloc(sizeof(struct trafcount));
+		if(!tl) {
+			freeacl(acl);
+			return(21);
+		}
+		memset(tl, 0, sizeof(struct trafcount));
+		tl->ace = acl;
+	
+		if((acl->action == COUNTIN)||(acl->action == COUNTOUT)||(acl->action == COUNTALL)) {
+			unsigned long lim;
+
+			tl->comment = ( char *)argv[1];
+			while(isdigit(*tl->comment))tl->comment++;
+			if(*tl->comment== '/')tl->comment++;
+			tl->comment = strdup(tl->comment);
+
+			sscanf((char *)argv[1], "%u", &tl->number);
+			sscanf((char *)argv[3], "%lu", &lim);
+			tl->type = getrotate(*argv[2]);
+			tl->traflim64 =  ((uint64_t)lim)*(1024*1024);
+			if(!tl->traflim64) {
+				free(tl);
+				freeacl(acl);
+				fprintf(stderr, "Wrong traffic limit specified, line %d\n", linenum);
+				return(6);
+			}
+			if(tl->number != 0 && conf.counterd >= 0) {
+				lseek(conf.counterd, 
+					sizeof(struct counter_header) + (tl->number - 1) * sizeof(struct counter_record),
+					SEEK_SET);
+				memset(&crecord, 0, sizeof(struct counter_record));
+				if(read(conf.counterd, &crecord, sizeof(struct counter_record)) == sizeof(struct counter_record)){
+				    tl->traf64 = crecord.traf64;
+				    tl->cleared = crecord.cleared;
+				    tl->updated = crecord.updated;
+				    if(tl->cleared < 0 || tl->cleared >=  MAX_COUNTER_TIME || tl->updated < 0 || tl->updated >=  MAX_COUNTER_TIME){
+					    fprintf(stderr, "Invalid, incompatible or corrupted counter file.\n");
+					    return(6);
+				    }
+				}
+			}
+		}
+		_3proxy_mutex_lock(&tc_mutex);
+		if(!conf.trafcounter){
+			conf.trafcounter = tl;
+		}
+		else {
+			struct trafcount * ntl;
+
+			for(ntl = conf.trafcounter; ntl->next; ntl = ntl->next);
+			ntl->next = tl;
+		}
+		_3proxy_mutex_unlock(&tc_mutex);
+			
+	}
+	return 0;
+}
+
+static int h_logdump(int argc, unsigned char **argv){
+	conf.logdumpsrv = (unsigned) atoi((char *) *(argv + 1));
+	if(argc > 2) conf.logdumpcli = (unsigned) atoi((char *) *(argv + 2));
+	return 0;
+}
+
+
+static int h_filtermaxsize(int argc, unsigned char **argv){
+	conf.filtermaxsize = atoi((char *) *(argv + 1));
+	return 0;
+}
+
+static int h_delimchar(int argc, unsigned char **argv){
+	conf.delimchar = *argv[1];
+	return 0;
+}
+
+
+#ifndef NORADIUS
+static int h_radius(int argc, unsigned char **argv){
+	uint16_t port;
+
+	memset(radiuslist, 0, sizeof(radiuslist));
+	if(strlen((char *)argv[1]) > 63) argv[1][63] = 0;
+	strcpy(radiussecret, (char *)argv[1]);
+	for( nradservers=0; nradservers < MAXRADIUS && nradservers < argc -2; nradservers++){
+		char *s = 0;
+		if((s=strchr((char *)argv[nradservers + 2], '/'))){
+			*s = 0;
+			s++;
+		}
+		if( !getip46(46, argv[nradservers + 2], (struct sockaddr *)&radiuslist[nradservers].authaddr)) return 1;
+		if( s && !getip46(46, (unsigned char *)s, (struct sockaddr *)&radiuslist[nradservers].localaddr)) return 2;
+		if(!*SAPORT(&radiuslist[nradservers].authaddr))*SAPORT(&radiuslist[nradservers].authaddr) = htons(1812);
+		port = ntohs(*SAPORT(&radiuslist[nradservers].authaddr));
+		radiuslist[nradservers].logaddr = radiuslist[nradservers].authaddr;
+ 	        *SAPORT(&radiuslist[nradservers].logaddr) = htons(port+1);
+	}
+	return 0;
+}
+#endif
+static int h_authcache(int argc, unsigned char **argv){
+	int authcachesize = 0;
+
+	conf.authcachetype = 0;
+	if(strstr((char *) *(argv + 1), "ip")) conf.authcachetype |= 1;
+	if(strstr((char *) *(argv + 1), "user")) conf.authcachetype |= 2;
+	if(strstr((char *) *(argv + 1), "pass")) conf.authcachetype |= 4;
+	if(strstr((char *) *(argv + 1), "limit")) conf.authcachetype |= 8;
+	if(strstr((char *) *(argv + 1), "acl")) conf.authcachetype |= 16;
+	if(strstr((char *) *(argv + 1), "ext")) conf.authcachetype |= 32;
+	if(strstr((char *) *(argv + 1), "dstaddr")) conf.authcachetype |= 64;
+	if(strstr((char *) *(argv + 1), "dstport")) conf.authcachetype |= 128;
+	if(strstr((char *) *(argv + 1), "dsthost")) conf.authcachetype |= 256;
+	if(strstr((char *) *(argv + 1), "dstoper")) conf.authcachetype |= 512;
+	if(strstr((char *) *(argv + 1), "srvaddr")) conf.authcachetype |= 1024;
+	if(strstr((char *) *(argv + 1), "srvport")) conf.authcachetype |= 2048;
+	if(argc > 2) conf.authcachetime = (unsigned) atoi((char *) *(argv + 2));
+	if(argc > 3) authcachesize  = (unsigned) atoi((char *) *(argv + 3));
+	if(!conf.authcachetype) conf.authcachetype = 6;
+	if(!conf.authcachetime) conf.authcachetime = 600;
+	if(!authcachesize) authcachesize = 65536*4;
+	if(auth_table.growlimit != authcachesize && inithashtable(&auth_table, authcachesize < 1024? authcachesize:1024, authcachesize < 1024? authcachesize:1024, authcachesize)){
+		fprintf(stderr, "Failed to initialize auth cache\n");
+		return 2;
+	}
+	return 0;
+}
+
+static int h_plugin(int argc, unsigned char **argv){
+#ifdef WITH_SSL
+	if(argc >= 3 && !strcmp((char *)argv[2], "ssl_plugin")){
+		return 0;
+	}
+#endif
+#ifdef WITH_PCRE
+	if(argc >= 3 && !strcmp((char *)argv[2], "pcre_plugin")){
+		return 0;
+	}
+#endif
+#ifdef NOPLUGINS
+	return 999;
+#else
+#ifdef _WIN32
+	HINSTANCE hi;
+	FARPROC fp;
+
+#ifdef _WINCE
+	hi = LoadLibraryW((LPCWSTR)CEToUnicode(argv[1]));
+#else
+	hi = LoadLibrary((char *)argv[1]);
+#endif
+	if(!hi) {
+		fprintf(stderr, "Failed to load %s, code %d\n", argv[1], (int)GetLastError());
+		return 1;
+	}
+#ifdef _WINCE
+	fp = GetProcAddressW(hi, (LPCWSTR)CEToUnicode(argv[2]));
+#else
+	fp = GetProcAddress(hi, (char *)argv[2]);
+#endif
+	if(!fp) {
+		printf("%s not found in %s, code: %d\n", argv[2], argv[1], (int)GetLastError());
+		return 2;
+	}
+	return (*(PLUGINFUNC)fp)(&pluginlink, argc - 2, (char **)argv + 2);
+#else	
+	void *hi, *fp;
+	hi = dlopen((char *)argv[1], RTLD_LAZY);
+	if(!hi) {
+	    fprintf(stderr, "%s", dlerror());
+	    return 1;
+	}
+	fp = dlsym(hi, (char *)argv[2]);
+	if(!fp) {
+	    fprintf(stderr, "%s", dlerror());
+	    return 2;
+	}
+	return (*(PLUGINFUNC)fp)(&pluginlink, argc - 2, (char **)argv + 2);
+#endif
+#endif
+}
+
+#ifndef _WIN32
+
+uid_t strtouid(unsigned char *str){
+ uid_t res = 0;
+
+	if(!isnumber(*(char *)str)){
+		struct passwd *pw;
+		pw = getpwnam((char *)str);
+		if(pw) res = pw->pw_uid;
+	}
+	else res = atoi((char *)str);
+	return res;
+}
+
+
+static int h_setuid(int argc, unsigned char **argv){
+  uid_t res = 0;
+	res = strtouid(argv[1]);
+	if(!res || setreuid(res,res)) {
+		fprintf(stderr, "Unable to set uid %d", res);
+		return(1);
+	}
+	return 0;
+}
+
+gid_t strtogid(unsigned char *str){
+  gid_t res = 0;
+
+	if(!isnumber(*(char *)str)){
+		struct group *gr;
+		gr = getgrnam((char *)str);
+		if(gr) res = gr->gr_gid;
+	}
+	else res = atoi((char *)str);
+	return res;
+}
+
+static int h_setgid(int argc, unsigned char **argv){
+  gid_t res = 0;
+
+	res = strtogid(argv[1]);
+	if(!res || setregid(res,res)) {
+		fprintf(stderr, "Unable to set gid %d", res);
+		return(1);
+	}
+	return 0;
+}
+
+
+static int h_chroot(int argc, unsigned char **argv){
+	uid_t uid = 0;
+	gid_t gid = 0;
+	if(argc > 2) {
+		uid = strtouid(argv[2]);
+		if(!uid){
+			fprintf(stderr, "Unable to resolve uid %s", argv[2]);
+			return(2);
+		}
+        }
+	if(argc > 3) {
+		gid = strtogid(argv[3]);
+		if(!gid){
+			fprintf(stderr, "Unable to resolve gid %s", argv[3]);
+			return(3);
+		}
+        }
+	if(!chrootp){
+		char *p;
+		if(chroot((char *)argv[1])) {
+			fprintf(stderr, "Unable to chroot %s", argv[1]);
+			return(1);
+		}
+		p = (char *)argv[1] + strlen((char *)argv[1]) ;
+		while (p > (char *)argv[1] && p[-1] == '/'){
+			p--;
+			*p = 0;
+		}
+		chrootp = strdup((char *)argv[1]);
+		if(!chrootp) return 21;
+	}
+	if (gid && setregid(gid,gid)) {
+		fprintf(stderr, "Unable to set gid %d", (int)gid);
+		return(4);
+	}
+	if (uid && setreuid(uid,uid)) {
+		fprintf(stderr, "Unable to set uid %d", (int)uid);
+		return(5);
+	}
+	if(chdir("/")){}
+	return 0;
+}
+#endif
+
+
+#ifdef WITH_SSL
+int h_mitm(int argc, unsigned char **argv);
+int h_nomitm(int argc, unsigned char **argv);
+int h_serv(int argc, unsigned char **argv);
+int h_noserv(int argc, unsigned char **argv);
+int h_cli(int argc, unsigned char **argv);
+int h_nocli(int argc, unsigned char **argv);
+int h_certcache(int argc, unsigned char **argv);
+int h_srvcert(int argc, unsigned char **argv);
+int h_srvkey(int argc, unsigned char **argv);
+int h_clicert(int argc, unsigned char **argv);
+int h_clikey(int argc, unsigned char **argv);
+int h_client_cipher_list(int argc, unsigned char **argv);
+int h_server_cipher_list(int argc, unsigned char **argv);
+int h_client_ciphersuites(int argc, unsigned char **argv);
+int h_server_ciphersuites(int argc, unsigned char **argv);
+int h_server_ca_file(int argc, unsigned char **argv);
+int h_server_ca_key(int argc, unsigned char **argv);
+int h_client_ca_file(int argc, unsigned char **argv);
+int h_client_ca_dir(int argc, unsigned char **argv);
+int h_client_ca_store(int argc, unsigned char **argv);
+int h_client_sni(int argc, unsigned char **argv);
+int h_client_alpn(int argc, unsigned char **argv);
+int h_server_ca_dir(int argc, unsigned char **argv);
+int h_server_ca_store(int argc, unsigned char **argv);
+int h_client_min_proto_version(int argc, unsigned char **argv);
+int h_client_max_proto_version(int argc, unsigned char **argv);
+int h_server_min_proto_version(int argc, unsigned char **argv);
+int h_server_max_proto_version(int argc, unsigned char **argv);
+int h_client_verify(int argc, unsigned char **argv);
+int h_no_client_verify(int argc, unsigned char **argv);
+int h_server_verify(int argc, unsigned char **argv);
+int h_no_server_verify(int argc, unsigned char **argv);
+int h_client_mode(int argc, unsigned char **argv);
+#endif
+#ifdef WITH_PCRE
+int h_pcre(int argc, unsigned char **argv);
+int h_pcre_rewrite(int argc, unsigned char **argv);
+int h_pcre_extend(int argc, unsigned char **argv);
+int h_pcre_options(int argc, unsigned char **argv);
+#endif
+
+struct commands commandhandlers[]={
+	{NULL,  "", h_noop, 1, 0},
+	{NULL,  "proxy", h_proxy, 1, 0},
+	{NULL,  "pop3p", h_proxy, 1, 0},
+	{NULL,  "imapp", h_proxy, 1, 0},
+	{NULL,  "ftppr", h_proxy, 1, 0},
+	{NULL,  "socks", h_proxy, 1, 0},
+	{NULL,  "tcppm", h_proxy, 4, 0},
+	{NULL,  "udppm", h_proxy, 4, 0},
+	{NULL,  "admin", h_proxy, 1, 0},
+	{NULL,  "dnspr", h_proxy, 1, 0},
+	{NULL,  "internal", h_internal, 2, 2},
+	{NULL, "external", h_external, 2, 2},
+	{NULL, "log", h_log, 1, 0},
+	{NULL, "service", h_service, 1, 1},
+	{NULL, "daemon", h_daemon, 1, 1},
+	{NULL, "config", h_config, 2, 2},
+	{NULL, "include", h_include, 2, 2},
+	{NULL, "archiver", h_archiver, 3, 0},
+	{NULL, "counter", h_counter, 2, 4},
+	{NULL, "rotate", h_rotate, 2, 2},
+	{NULL, "logformat", h_logformat, 2, 2},
+	{NULL, "timeouts", h_timeouts, 2, 0},
+	{NULL, "auth", h_auth, 2, 0},
+	{NULL, "users", h_users, 1, 0},
+	{NULL, "maxconn", h_maxconn, 2, 2},
+	{NULL, "flush", h_flush, 1, 1},
+	{NULL, "nserver", h_nserver, 2, 2},
+	{NULL, "fakeresolve", h_fakeresolve, 1, 1},
+	{NULL, "nscache", h_nscache, 2, 2},
+	{NULL, "nscache6", h_nscache6, 2, 2},
+	{NULL, "nsrecord", h_nsrecord, 3, 3},
+	{NULL, "dialer", h_dialer, 2, 2},
+	{NULL, "system", h_system, 2, 2},
+	{NULL, "pidfile", h_pidfile, 2, 2},
+	{NULL, "monitor", h_monitor, 2, 2},
+	{NULL, "parent", h_parent, 5, 0},
+	{NULL, "allow", h_ace, 1, 0},
+	{NULL, "deny", h_ace, 1, 0},
+	{NULL, "redirect", h_ace, 3, 0},
+	{NULL, "bandlimin", h_ace, 2, 0},
+	{NULL, "bandlimout", h_ace, 2, 0},
+	{NULL, "nobandlimin", h_ace, 1, 0},
+	{NULL, "nobandlimout", h_ace, 1, 0},
+	{NULL, "countin", h_ace, 4, 0},
+	{NULL, "nocountin", h_ace, 1, 0},
+	{NULL, "countout", h_ace, 4, 0},
+	{NULL, "nocountout", h_ace, 1, 0},
+	{NULL, "countall", h_ace, 4, 0},
+	{NULL, "nocountall", h_ace, 1, 0},
+	{NULL, "connlim", h_ace, 4, 0},
+	{NULL, "noconnlim", h_ace, 1, 0},
+	{NULL, "plugin", h_plugin, 3, 0},
+	{NULL, "logdump", h_logdump, 2, 3},
+	{NULL, "filtermaxsize", h_filtermaxsize, 2, 2},
+	{NULL, "nolog", h_nolog, 1, 1},
+	{NULL, "weight", h_nolog, 2, 2},
+	{NULL, "authcache", h_authcache, 2, 4},
+	{NULL, "smtpp", h_proxy, 1, 0},
+	{NULL, "delimchar",h_delimchar, 2, 2},
+	{NULL, "authnserver", h_authnserver, 2, 2},
+	{NULL, "stacksize", h_stacksize, 2, 2},
+	{NULL, "force", h_force, 1, 1},
+	{NULL, "noforce", h_noforce, 1, 1},
+	{NULL, "parentretries", h_parentretries, 2, 2},
+	{NULL, "auto", h_proxy, 1, 0},
+	{NULL, "backlog", h_backlog, 2, 2},
+	{NULL, "tlspr", h_proxy, 1, 0},
+	{NULL, "maxseg", h_maxseg, 2, 2},
+#ifndef NORADIUS
+	{NULL, "radius", h_radius, 3, 0},
+#endif
+#ifndef _WIN32
+	{NULL, "setuid", h_setuid, 2, 2},
+	{NULL, "setgid", h_setgid, 2, 2},
+	{NULL, "chroot", h_chroot, 2, 4},
+#endif
+#ifdef WITH_SSL
+	{NULL, "ssl_mitm", h_mitm, 1, 1},
+	{NULL, "ssl_nomitm", h_nomitm, 1, 1},
+	{NULL, "ssl_serv", h_serv, 1, 1},
+	{NULL, "ssl_noserv", h_noserv, 1, 1},
+	{NULL, "ssl_server_cert", h_srvcert, 1, 2},
+	{NULL, "ssl_server_key", h_srvkey, 1, 2},
+	{NULL, "ssl_server_ca_file", h_server_ca_file, 1, 2},
+	{NULL, "ssl_server_ca_key", h_server_ca_key, 1, 2},
+	{NULL, "ssl_client_ca_file", h_client_ca_file, 1, 2},
+	{NULL, "ssl_client_ca_dir", h_client_ca_dir, 1, 2},
+	{NULL, "ssl_client_ca_store", h_client_ca_store, 1, 2},
+	{NULL, "ssl_client_ciphersuites", h_client_ciphersuites, 1, 2},
+	{NULL, "ssl_server_ciphersuites", h_server_ciphersuites, 1, 2},
+	{NULL, "ssl_client_cipher_list", h_client_cipher_list, 1, 2},
+	{NULL, "ssl_server_cipher_list", h_server_cipher_list, 1, 2},
+	{NULL, "ssl_client_min_proto_version", h_client_min_proto_version, 1, 2},
+	{NULL, "ssl_server_min_proto_version", h_server_min_proto_version, 1, 2},
+	{NULL, "ssl_client_max_proto_version", h_client_max_proto_version, 1, 2},
+	{NULL, "ssl_server_max_proto_version", h_server_max_proto_version, 1, 2},
+	{NULL, "ssl_client_verify", h_client_verify, 1, 1},
+	{NULL, "ssl_client_no_verify", h_no_client_verify, 1, 1},
+	{NULL, "ssl_cli", h_cli, 1, 1},
+	{NULL, "ssl_nocli", h_nocli, 1, 1},
+	{NULL, "ssl_client_cert", h_clicert, 1, 2},
+	{NULL, "ssl_client_key", h_clikey, 1, 2},
+	{NULL, "ssl_server", h_serv, 1, 1},
+	{NULL, "ssl_noserver", h_noserv, 1, 1},
+	{NULL, "ssl_client", h_cli, 1, 1},
+	{NULL, "ssl_noclient", h_nocli, 1, 1},
+	{NULL, "ssl_server_verify", h_server_verify, 1, 1},
+	{NULL, "ssl_server_no_verify", h_no_server_verify, 1, 1},
+	{NULL, "ssl_server_ca_dir", h_server_ca_dir, 1, 2},
+	{NULL, "ssl_server_ca_store", h_server_ca_store, 1, 2},
+	{NULL, "ssl_client_sni", h_client_sni, 1, 2},
+	{NULL, "ssl_client_alpn", h_client_alpn, 1, 0},
+	{NULL, "ssl_client_mode", h_client_mode, 1, 2},
+	{NULL, "ssl_certcache", h_certcache, 2, 2},
+#endif
+#ifdef WITH_PCRE
+	{NULL, "pcre", h_pcre, 4, 0},
+	{NULL, "pcre_rewrite", h_pcre_rewrite, 5, 0},
+	{NULL, "pcre_extend", h_pcre_extend, 2, 0},
+	{NULL, "pcre_options", h_pcre_options, 2, 0},
+#endif
+	{NULL, 	 "", h_noop, 1, 0}
+};
+
+void initcommands(void){
+	static int initialized = 0;
+	unsigned i;
+	if(initialized) return;
+	initialized = 1;
+	for(i = 0; i + 1 < sizeof(commandhandlers)/sizeof(commandhandlers[0]); i++)
+		commandhandlers[i].next = commandhandlers + i + 1;
+}
+
+int parsestr (unsigned char *str, unsigned char **argm, int nitems, unsigned char ** buff, int *inbuf, int *bufsize){
+#define buf (*buff)
+	int argc = 0;
+	int space = 1;
+	int comment = 0;
+	unsigned char * incbegin = 0;
+	int fd;
+	int res, len;
+	unsigned char *str1;
+
+	for(;;str++){
+	 if(*str == '\"'){
+		str1 = str;
+		do {
+			*str1 = *(str1 + 1);
+		}while(*(str1++));
+		if(!comment || *str != '\"'){
+			comment = !comment;
+		}
+	 }
+         switch(*str){
+		case '\0': 
+			if(comment || incbegin) return -1;
+			argm[argc] = 0;
+			return argc;
+		case '$':
+			if(comment){
+				if(space){
+					argm[argc++] = str;
+					if(argc >= nitems) return argc;
+					space = 0;
+				}
+			}
+			else if(!included){
+				incbegin = str;
+				*str = 0;
+			}
+			break;
+		case '\r':
+		case '\n':
+		case '\t':
+		case ' ':
+			if(!comment){
+				*str = 0;
+				space = 1;
+				if(incbegin){
+					if(argc) argc--;
+					if((fd = open((char *)incbegin+1, O_RDONLY)) < 0){
+						fprintf(stderr, "Failed to open %s\n", incbegin+1);
+						return -1;
+					}
+					if((*bufsize - *inbuf) <STRINGBUF){
+						*bufsize += STRINGBUF;
+						if(!(buf = realloc(buf, *bufsize))){
+							fprintf(stderr, "Failed to allocate memory for %s\n", incbegin+1);
+							close(fd);
+							return -1;
+						}
+					}
+					len = 0;
+					if(argc > 0 && argm[argc]!=(incbegin+1)) {
+						len = (int)strlen((char *)argm[argc]);
+						memmove(buf+*inbuf, argm[argc], len);
+					}
+					if((res = read(fd, buf+*inbuf+len, STRINGBUF-(1+len))) <= 0) {
+						perror((char *)incbegin+1);
+						close(fd);
+						return -1;
+					}
+					close(fd);
+					buf[*inbuf+res+len] = 0;
+					incbegin = buf + *inbuf;
+					(*inbuf) += (res + len + 1);
+					included++;
+					argc+=parsestr(incbegin, argm + argc, nitems - argc, buff, inbuf, bufsize);
+					included--;
+					incbegin = NULL;
+
+				}
+				break;
+			}
+		default:
+			if(space) {
+				if(comment && *str == '\"' && str[1] != '\"'){
+					str++;
+					comment = 0;
+				}
+				argm[argc++] = str;
+				if(argc >= nitems) return argc;
+				space = 0;
+			}
+	 }
+	}
+#undef buf
+}
+
+
+int readconfig(FILE * fp){
+ unsigned char ** argv = NULL;
+ unsigned char * buf = NULL;
+  int bufsize = STRINGBUF*2;
+  int inbuf = 0;
+  int argc;
+  struct commands * cm;
+  int res = 0;
+
+  if( !(buf = malloc(bufsize)) || ! (argv = malloc((NPARAMS + 1) * sizeof(unsigned char *))) ) {
+		fprintf(stderr, "No memory for configuration");
+		return(10);
+  }
+  for (linenum = 1; fgets((char *)buf, STRINGBUF, fp); linenum++){
+	if(!*buf || isspace(*buf) || (*buf) == '#')continue;
+
+	inbuf = (int)(strlen((char *)buf) + 1);
+	argc = parsestr (buf, argv, NPARAMS-1, &buf, &inbuf, &bufsize);
+	if(argc < 1) {
+		fprintf(stderr, "Parse error line %d\n", linenum);
+		return(11);
+	}
+	argv[argc] = NULL;
+	if(!strcmp((char *)argv[0], "end") && argc == 1) {	
+		break;
+	}
+	else if(!strcmp((char *)argv[0], "writable") && argc == 1) {	
+		if(!writable){
+			writable = freopen(curconf, "r+", fp);
+			if(!writable){
+				fprintf(stderr, "Unable to reopen config for writing: %s\n", curconf);
+				return 1;
+			}
+		}
+		continue;
+	}
+
+	res = 1;
+	for(cm = commandhandlers; cm; cm = cm->next){
+		if(!strcmp((char *)argv[0], (char *)cm->command)){
+		    if(argc < cm->minargs || (cm->maxargs && argc > cm->maxargs)){
+			fprintf(stderr, "Command: '%s' wrong number of arguments , line %d\n", argv[0], linenum);
+			return(linenum);
+		    }
+		    res = (*cm->handler)(argc, argv);
+		    if(res > 0){
+			fprintf(stderr, "Command: '%s' failed with code %d, line %d\n", argv[0], res, linenum);
+			return(linenum);
+		    }
+		    if(!res) break;
+		}
+	}
+	if(res != 1)continue;
+	fprintf(stderr, "Unknown command: '%s' line %d\n", argv[0], linenum);
+	return(linenum);
+  }
+  free(buf);
+  free(argv);
+  return 0;
+
+}
+
+
+
+void freepwl(struct passwords *pwl){
+	for(; pwl; pwl = (struct passwords *)itfree(pwl, pwl->next)){
+		if(pwl->user)free(pwl->user);
+		if(pwl->password)free(pwl->password);
+	}
+}
+
+
+void freeconf(struct extparam *confp){
+ struct bandlim * bl;
+ struct bandlim * blout;
+ struct connlim * cl;
+ struct trafcount * tc;
+ struct ace *acl;
+ struct filemon *fm;
+ int counterd, archiverc;
+ unsigned char **archiver;
+ unsigned char * logformat;
+
+ int i;
+
+
+
+
+ _3proxy_mutex_lock(&tc_mutex);
+ confp->trafcountfunc = NULL;
+ tc = confp->trafcounter;
+ confp->trafcounter = NULL;
+ counterd = confp->counterd;
+ confp->counterd = -1;
+ confp->countertype = NONE;
+ _3proxy_mutex_unlock(&tc_mutex);
+
+ _3proxy_mutex_lock(&bandlim_mutex);
+ bl = confp->bandlimiter;
+ blout = confp->bandlimiterout;
+ confp->bandlimiter = NULL;
+ confp->bandlimiterout = NULL;
+ confp->bandlimfunc = NULL;
+ confp->bandlimver++;
+ _3proxy_mutex_unlock(&bandlim_mutex);
+ _3proxy_mutex_lock(&connlim_mutex);
+ cl = confp->connlimiter;
+ confp->connlimiter = NULL;
+ _3proxy_mutex_unlock(&connlim_mutex);
+
+ destroyhashtable(&pwl_table);
+
+ confp->logfunc = lognone;
+ logformat = confp->logformat;
+ confp->logformat = NULL;
+ confp->rotate = 0;
+ confp->logtype = NONE;
+ confp->logtime = confp->time = 0;
+
+ archiverc = confp->archiverc;
+ confp->archiverc = 0;
+ archiver = confp->archiver;
+ confp->archiver = NULL;
+ fm = confp->fmon;
+ confp->fmon = NULL;
+ confp->bandlimfunc = NULL;
+ memset(&confp->intsa, 0, sizeof(confp->intsa));
+ memset(&confp->extsa, 0, sizeof(confp->extsa));
+#ifndef NOIPV6
+ memset(&confp->extsa6, 0, sizeof(confp->extsa6));
+ *SAFAMILY(&confp->extsa6) = AF_INET6;
+#endif
+ *SAFAMILY(&confp->intsa) = AF_INET;
+ *SAFAMILY(&confp->extsa) = AF_INET;
+ confp->maxchild = DEFAULT_MAXCHILD;
+ confp->backlog = 0;
+ resolvfunc = NULL;
+ numservers = 0;
+ acl = confp->acl;
+ confp->acl = NULL;
+
+ usleep(SLEEPTIME);
+
+ {
+	char * args[] = {"auth", "iponly", NULL};
+  	h_auth(2, (unsigned char **)args);
+ }
+ if(tc)dumpcounters(tc,counterd);
+ for(; tc; tc = (struct trafcount *) itfree(tc, tc->next)){
+	if(tc->comment)free(tc->comment);
+	freeacl(tc->ace);
+ }
+
+ 
+ freeacl(acl);
+ for(; bl; bl = (struct bandlim *) itfree(bl, bl->next)) freeacl(bl->ace);
+ for(; blout; blout = (struct bandlim *) itfree(blout, blout->next))freeacl(blout->ace);
+ for(; cl; cl = (struct connlim *) itfree(cl, cl->next)) freeacl(cl->ace);
+
+ if(counterd != -1) {
+	close(counterd);
+ }
+ for(; fm; fm = (struct filemon *)itfree(fm, fm->next)){
+	if(fm->path) free(fm->path);
+ }
+ if(logformat) {
+	free(logformat);
+ }
+ if(archiver) {
+	for(i = 0; i < archiverc; i++) free(archiver[i]);
+	free(archiver);
+ }
+ havelog = 0;
+}
+
+int reload (void){
+	FILE *fp;
+	int error = -2;
+
+	_3proxy_mutex_lock(&config_mutex);
+#ifdef WITH_SSL
+	ssl_install();
+#endif
+#ifdef WITH_PCRE
+	pcre_install();
+#endif
+	conf.paused++;
+	freeconf(&conf);
+	conf.paused++;
+
+	fp = confopen();
+	if(fp){
+		error = readconfig(fp);
+		conf.version++;
+		if(error) {
+			 freeconf(&conf);
+		}
+		if(!writable)fclose(fp);
+	}
+	_3proxy_mutex_unlock(&config_mutex);
+	return error;
+}

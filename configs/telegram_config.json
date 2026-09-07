@@ -1,0 +1,24 @@
+{
+    "api_id": 35611241,
+    "api_hash": "dd41c4667ac94a6d7b62b6f4b922ba84",
+    "phone": "+79195260274",
+    "channels": [
+        "t.me/ru2ch",
+        "t.me/overhear"
+    ],
+    "keywords": [
+        "холодильник",
+        "морозильник",
+        "техника",
+        "купить",
+        "нужен"
+    ],
+    "product": "холодильник",
+    "intent_threshold": 40,
+    "scan_limit": 20,
+    "proxy": {
+        "type": "socks5",
+        "addr": "127.0.0.1",
+        "port": 1080
+    }
+}

@@ -1,0 +1,114 @@
+.TH socks "8" "May 2026" "3proxy 0.9" "Universal proxy server"
+.SH NAME
+.B socks
+\- SOCKS 4/4.5/5 gateway service
+.SH SYNOPSIS
+.BR "socks " [ -d ]
+.IB \fR[ -l \fR[ \fR[ @ \fR] logfile \fR]]
+.IB \fR[ -p port\fR]
+.IB \fR[ -i internal_ip\fR]
+.IB \fR[ -e external_ip\fR]
+.SH DESCRIPTION
+.B socks
+is SOCKS server. It supports SOCKSv4, SOCKSv4.5 (extension to v4 for
+server side name resolution) and SOCKSv5. SOCKSv5 specification allows both
+outgoing and reverse TCP connections and UDP portmapping.
+.SH OPTIONS
+.TP
+.B -I
+Inetd mode. Standalone service only.
+.TP
+.B -d
+Daemonize. Detach service from console and run in the background.
+.TP
+.B -t
+Be silenT. Do not log start/stop/accept error records.
+.TP
+.B -u
+Never ask for username authentication
+.TP
+.B -e
+External address. IP address of the interface the proxy should initiate connections
+from. External IP must be specified if you need incoming connections.
+By default, the system will decide which address to use in accordance
+with the routing table.
+.TP
+.B \-ni\fIPATH\fR
+(Linux only) Switch to the network namespace identified by
+.I PATH
+before opening the listening socket. The current namespace is saved and restored
+immediately after binding, so outgoing connections run in the original namespace
+unless
+.B \-ne
+is also given.
+.TP
+.B \-ne\fIPATH\fR
+(Linux only) Switch to the network namespace identified by
+.I PATH
+after the listening socket has been bound (and after restoring from
+.B \-ni
+if applicable). Both options accept any namespace file path
+(e.g.\& \fI/var/run/netns/myns\fR or \fI/proc/PID/ns/net\fR)
+and require \fBCAP_SYS_ADMIN\fR.
+.TP
+.B -Ne
+External NAT address 3proxy reports to client for CONNECT/BIND.
+This is external address of NAT between 3proxy and destination server.
+By default, the external address is reported. It's only useful in the case
+of IP-IP NAT and does not work with port translation. 
+.TP
+.B -Ni
+Internal NAT address 3proxy reports to client for UDPASSOC.
+This is external address of the NAT between 3proxy and the client, client
+uses to connect to 3proxy.
+By default, the internal address is reported. It's only useful in the case
+of IP-IP NAT and does not work with port translation. 
+.TP
+.B -i
+Internal address. IP address the proxy accepts connections to.
+By default, connections to any interface are accepted. It\'s usually unsafe.
+Unix domain sockets can be specified with
+.I -iunix:/path/to/socket
+syntax (e.g., -iunix:/var/run/socks.sock). On Linux, abstract sockets use
+.I -iunix:@socketname
+syntax.
+.TP
+.B -p
+Port. Port proxy listens for incoming connections. Default is 1080.
+.TP
+.B -l
+Log. By default logging is to stdout. If
+.I logfile
+is specified logging is to file. Under Unix, if
+.RI \' @ \'
+preceeds
+.IR logfile ,
+syslog is used for logging.
+.TP
+.B -S
+Increase or decrease stack size. You may want to try something like -S8192 if you experience 3proxy
+crashes.
+.SH CLIENTS
+You should use a client with SOCKS support or use some socksification support
+(for example
+.I SocksCAP
+or
+.IR FreeCAP ).
+Configure client to use
+.I internal_ip
+and
+.IR port .
+SOCKS allows you to use almost any application protocol without limitation. This
+implementation also allows you to open privileged ports on the server (if socks has
+sufficient privileges). If you need to control access, use
+.BR 3proxy (8)
+instead.
+.SH BUGS
+Report all bugs to
+.BR 3proxy@3proxy.org
+.SH SEE ALSO
+3proxy(8), proxy(8), ftppr(8), pop3p(8), tcppm(8), udppm(8), syslogd(8),
+.br
+https://3proxy.org/
+.SH AUTHORS
+3proxy is designed by Vladimir Dubrovin <vlad@3proxy.org>

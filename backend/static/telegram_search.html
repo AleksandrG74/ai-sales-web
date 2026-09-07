@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Поиск Клиентов</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .container { background: #f5f5f5; padding: 20px; border-radius: 10px; }
+        input, button { padding: 10px; margin: 5px; }
+        .result { margin-top: 20px; }
+        .lead { background: white; padding: 10px; margin: 5px 0; border-radius: 5px; }
+        .score { color: green; font-weight: bold; }
+        .status { margin: 10px 0; color: blue; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Telegram Поиск Клиентов</h1>
+        <p>Поиск потенциальных клиентов в Telegram (через веб-версию)</p>
+        
+        <div>
+            <input type="text" id="phone" placeholder="Номер телефона" value="+79195260274">
+            <input type="text" id="product" placeholder="Товар" value="холодильник">
+            <button onclick="searchClients()">🔍 Начать поиск</button>
+        </div>
+        
+        <div id="status" class="status"></div>
+        <div id="error" class="error"></div>
+        <div id="results" class="result"></div>
+    </div>
+    
+    <script>
+        const API_BASE = '/api/web-search';
+        
+        async function searchClients() {
+            const phone = document.getElementById('phone').value;
+            const product = document.getElementById('product').value;
+            const statusDiv = document.getElementById('status');
+            const errorDiv = document.getElementById('error');
+            const resultsDiv = document.getElementById('results');
+            
+            statusDiv.textContent = '⏳ Поиск клиентов...';
+            errorDiv.textContent = '';
+            resultsDiv.innerHTML = '';
+            
+            try {
+                const response = await fetch(`${API_BASE}/search`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        phone: phone,
+                        product: product,
+                        channels: ['t.me/ru2ch', 't.me/overhear']
+                    })
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Ошибка поиска');
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    statusDiv.textContent = `✅ Найдено ${data.leads?.length || 0} потенциальных клиентов`;
+                    
+                    if (data.leads && data.leads.length > 0) {
+                        resultsDiv.innerHTML = '<h3>📋 Найденные клиенты:</h3>';
+                        data.leads.forEach(lead => {
+                            const div = document.createElement('div');
+                            div.className = 'lead';
+                            const date = lead.created_at ? new Date(lead.created_at).toLocaleDateString() : 'Неизвестно';
+                            div.innerHTML = `
+                                <strong>👤 ${lead.username || lead.user_id}</strong>
+                                <p>${lead.message}</p>
+                                <span class="score">Score: ${lead.intent_score}%</span>
+                                <span style="margin-left: 10px;">📱 ${lead.source}</span>
+                                <span style="margin-left: 10px;">📊 ${lead.status}</span>
+                                <span style="margin-left: 10px; font-size: 0.8em; color: #666;">${date}</span>
+                            `;
+                            resultsDiv.appendChild(div);
+                        });
+                    } else {
+                        resultsDiv.innerHTML = '<p>⚠️ Клиенты не найдены</p>';
+                    }
+                } else {
+                    statusDiv.textContent = '❌ Ошибка поиска';
+                    errorDiv.textContent = data.message || 'Неизвестная ошибка';
+                }
+            } catch (error) {
+                errorDiv.textContent = `❌ Ошибка: ${error.message}`;
+                statusDiv.textContent = '';
+            }
+        }
+        
+        // Загружаем существующих клиентов при открытии
+        async function loadLeads() {
+            try {
+                const response = await fetch('/api/leads/?limit=10');
+                const data = await response.json();
+                const resultsDiv = document.getElementById('results');
+                
+                if (data.leads && data.leads.length > 0) {
+                    resultsDiv.innerHTML = '<h3>📋 Существующие клиенты:</h3>';
+                    data.leads.forEach(lead => {
+                        const div = document.createElement('div');
+                        div.className = 'lead';
+                        div.innerHTML = `
+                            <strong>👤 ${lead.username || lead.user_id}</strong>
+                            <p>${lead.message}</p>
+                            <span class="score">Score: ${lead.intent_score}%</span>
+                            <span style="margin-left: 10px;">📱 ${lead.source}</span>
+                            <span style="margin-left: 10px;">📊 ${lead.status}</span>
+                        `;
+                        resultsDiv.appendChild(div);
+                    });
+                }
+            } catch (error) {
+                console.error('Ошибка загрузки:', error);
+            }
+        }
+        
+        loadLeads();
+    </script>
+</body>
+</html>

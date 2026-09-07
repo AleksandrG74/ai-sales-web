@@ -1,0 +1,1505 @@
+.TH 3proxy.cfg "5" "May 2026" "3proxy 0.9" "Universal proxy server"
+.SH NAME
+.B 3proxy.cfg
+3proxy configuration file
+.SH DESCRIPTION
+ Common structure:
+.br
+ Configuration file is a text file 3proxy reads configuration from. Each line
+of the file is a command executed immediately, as if it were given from the
+console. The sequence of commands is important. The configuration file is actually a
+script for the 3proxy executable.
+Each line of the file is treated as a blank (space or tab) separated
+command line. Additional space characters are ignored. 
+Think about 3proxy as "application level router" with console interface.
+
+.br
+ Comments:
+.br
+ Any line beginning with a space character or \'#\' character is a comment. It\'s
+ignored. <LF>s are ignored. <CR> is the end of a command.
+
+.br
+ Quotation:
+.br
+ The quotation character is " (double quote). Quotation must be used to quote
+spaces or other special characters. To use a quotation character inside
+a quoted string, the character must be doubled (BASIC convention). For example, to use
+HELLO "WORLD" as an argument, you should write it as "HELLO ""WORLD""".
+Good practice is to quote any argument you use.
+
+.br
+ File inclusion:
+.br
+ You can include file by using $FILENAME macro (replace FILENAME with a path
+to file, for example $/usr/local/etc/3proxy/conf.incl or 
+ $"c:\\\\Program Files\\3proxy\\include.cfg" Quotation is
+required in last example because path contains space character. 
+For included file <CR> (end of line characters) is treated as space character
+(arguments delimiter instead of end of command delimiter). 
+Thus, include files are only useful to store long single-line commands
+(like userlist, network lists, etc).
+To use dollar sign somewhere in argument it must be quoted. 
+Recursion is not allowed.
+
+.br
+ Next commands start gateway services:
+
+.br
+.B proxy
+[options]
+.br
+.B socks
+[options]
+.br
+.B pop3p
+[options]
+.br
+.B imapp
+[options]
+.br
+.B smtpp
+[options]
+.br
+.B ftppr
+[options]
+.br
+.B admin
+[options]
+.br
+.B dnspr
+[options]
+.br
+.B tcppm
+[options]
+\fI<SRCPORT>\fR \fI<DSTADDR>\fR \fI<DSTPORT>\fR
+.br
+.B udppm
+[options]
+\fI<SRCPORT>\fR \fI<DSTADDR>\fR \fI<DSTPORT>\fR
+.br
+ Descriptions:
+.br
+.B proxy
+HTTP/HTTPS proxy (default port 3128)
+.br
+.B socks
+SOCKS 4/4.5/5 proxy (default port 1080)
+.br
+.B tlspr
+SNI proxy (destination address is taken from TLS handshake), may be used to redirect any TLS-based traffic
+.br
+.B auto
+Proxy with protocol autoselection between proxy / socks / tlspr
+.br
+.B pop3p
+POP3 proxy (default port 110)
+.br
+.B imapp
+IMAPv4 proxy (default port 143)
+.br
+.B smtpp
+SMTP proxy (default port 25)
+.br
+.B ftppr
+FTP proxy (default port 21)
+.br
+.B admin
+Web interface (default port 80)
+.br
+.B dnspr
+caching DNS proxy (default port 53)
+.br
+.B tcppm
+TCP portmapper. Destination address (DSTADDR) can be a Unix domain socket
+using the syntax
+.I unix:/path/to/socket
+(e.g., tcppm 8080 unix:/var/run/app.sock 0). On Linux, abstract sockets use
+.I unix:@socketname
+syntax. When using Unix socket destination, the port number is ignored
+but must be specified for syntax compatibility.
+.br
+.B udppm
+UDP portmapper
+
+.br
+ Options:
+.br
+.B -p\fINUMBER\fR
+change default server port to NUMBER
+.br
+.B -6
+Only resolve IPv6 addresses. IPv4 addresses are packed in IPv6 in IPV6_V6ONLY compatible way.
+.br
+.B -4
+Only resolve IPv4 addresses
+.br
+.B -46
+Prefer IPv4. Resolve IPv6 addresses if IPv4 address is not resolvable
+.br
+.B -64
+Prefer IPv6. Resolve IPv4 addresses if IPv6 address is not resolvable
+.br
+.B -e
+External address. IP address of the interface the proxy should initiate connections
+from. External IP must be specified if you need incoming connections.
+By default the system will decide which address to use in accordance
+with the routing table.
+.br
+.B -i
+Internal address. IP address the proxy accepts connections to.
+By default, connections to any interface are accepted.
+Unix domain sockets can be specified with
+.I -iunix:/path/to/socket
+syntax. On Linux, abstract sockets use
+.I -iunix:@socketname
+syntax. 
+.br
+.B -Di\fIINTERFACE\fB, -De\fIINTERFACE\fR
+bind internal (\fB-Di\fR) / external (\fB-De\fR) interface to given INTERFACE (e.g. eth0) if \fBSO_BINDTODEVICE\fR is supported by the system. You may need to run as root or have \fBCAP_NET_RAW\fR capability in order to bind to an interface, depending on the system, so this option may require root privileges and can be incompatible with some configuration commands like \fBchroot\fR and \fBsetuid\fR (and \fBdaemon\fR if setcap is used).
+.br
+.B -ni\fIPATH\fB, -ne\fIPATH\fR
+(Linux only) Switch to the network namespace identified by the filesystem path \fIPATH\fR (e.g. \fI/var/run/netns/myns\fR or \fI/proc/PID/ns/net\fR) for the listening socket (\fB-ni\fR) or for outgoing connections (\fB-ne\fR).
+With \fB-ni\fR the current namespace is saved before opening the listening socket and restored immediately after binding, so that the rest of the process (outgoing connections, child threads) runs in the original namespace unless \fB-ne\fR is also given.
+With \fB-ne\fR the process switches to the specified namespace after the listening socket is bound (and after restoring from \fB-ni\fR if applicable).
+Requires \fBCAP_SYS_ADMIN\fR (or \fBCAP_NET_ADMIN\fR on recent kernels) and is incompatible with \fBchroot\fR/\fBsetuid\fR/\fBdaemon\fR if privileges are dropped before the switch takes effect.
+.br
+.B -Ne
+(for socks) External NAT address (between 3proxy and destination server) to report to client for CONNECT and BIND. By default external address is reported. It's only useful in the case of IP-IP NAT (will not work for PAT).
+.br
+.B -Ni
+(for socks) Internal NAT address (between client and 3proxy) to report to client for UDPASSOC. By default internal address is reported. It's only useful in the case of IP-IP NAT (will not work for PAT).
+.br
+.B -R\fIHOST\fB:\fIport\fR
+listen on given local HOST:port for incoming connections instead of making remote outgoing connection. Can be used with another 3proxy service running -r option for connect back functionality. Most commonly used with tcppm. HOST can be given as IP or hostname, useful in case of dynamic DNS.
+.br
+.B -r\fIHOST\fB:\fIport\fR
+connect to given remote HOST:port instead of listening local connection on -p or default port. Can be used with another 3proxy service running -R option for connect back functionality. Most commonly used with proxy or socks. HOST can be given as IP or hostname, useful in case of dynamic DNS.
+.br
+.B -oc\fIOPTIONS\fB, -os\fIOPTIONS\fB, -ol\fIOPTIONS\fB, -or\fIOPTIONS\fB, -oR\fIOPTIONS\fR
+options for proxy-to-client (\fB-oc\fR), proxy-to-server (\fB-os\fR), proxy listening (\fB-ol\fR), connect back client (\fB-or\fR), connect back listening (\fB-oR\fR) sockets.
+Options like TCP_CORK, TCP_NODELAY, TCP_DEFER_ACCEPT, TCP_QUICKACK, TCP_TIMESTAMPS, TCP_FASTOPEN, SO_REUSEADDR, SO_REUSEPORT, SO_EXCLUSIVEADDRUSE, SO_PORT_SCALABILITY, SO_REUSE_UNICASTPORT, SO_KEEPALIVE, SO_DONTROUTE may be supported depending on OS.
+SO_REUSEADDR and SO_REUSEPORT are set on the listening socket by default on Unix. On Windows SO_REUSEADDR is not set: it is not required to rebind a listening port and it only lets another local process bind the same address and port. Use SO_EXCLUSIVEADDRUSE (Windows) on the listening socket (\fB-ol\fR) to prevent that.
+.br
+.B -H
+(for all services) Expect HAProxy PROXY protocol v1 header on incoming connection.
+This allows the proxy to receive real client IP address from HAProxy or other
+load balancer that supports the PROXY protocol. The header must be sent before
+any protocol-specific data.
+.br
+.B -g(\fIGRACE_TRAFF\fB,\fIGRACE_NUM\fB,\fIGRACE_DELAY\fR)
+delay GRACE_DELAY milliseconds before polling if average polling size is below GRACE_TRAFF bytes and GRACE_NUM read operations in a single direction are detected within 1 second. Useful to minimize polling
+.br
+.B -s
+ (for admin) secure, allow only secure operations, currently only traffic counters
+view without ability to reset.
+.br
+ (for TCP services, Linux) enable splice(). splice() is not built by default and
+is disabled even when built, because current Linux does not implement
+SPLICE_F_MOVE, so no real zero-copy takes place and the read/write path is faster
+for most traffic. Rebuild with -DWITHSPLICE to make -s available, -s0 disables it
+explicitly.
+.br
+.B -C
+ (for TCP services) a connection closed by any of the sides terminates the
+session, buffered data is delivered before the sockets are closed. By default
+the session is kept until both sides close the connection (TCP half-close).
+Half-close is required for the protocols where one of the sides closes its
+sending side and expects the answer, but it keeps the socket of the side which
+has already closed the connection in CLOSE_WAIT state. Use -C to close both
+sockets as soon as any of the sides closes the connection, -C1 to request
+the default behaviour explicitly.
+.br
+.B -U\fI[MODE]\fR
+ (for socks) what to do when the destination changes within an UDP association:
+\fB1\fR - log it, \fB2\fR - authorize it, \fB3\fR - both, the default,
+\fB0\fR (same as bare \fB-U\fR) - neither. The destination of the first datagram
+is always authorized and logged. With \fB-U0\fR and \fB-U1\fR the destination is
+not authorized again, so ACLs limiting the destination only apply to the first
+destination of the association, and the parent proxy and the external address
+selected for it are kept for the whole association. Use \fB-U2\fR to keep the
+authorization and to drop the per-destination log records only.
+.br
+ (for dnspr) simple, do not use resolver and 3proxy cache, always use external DNS server.
+.br
+ (for udppm) singlepacket, expect only one packet from both client and server
+.br
+.B -u
+Never ask for username/password
+.br
+.B -u2
+(for socks) require username/password in authentication methods
+.br
+.B -a
+(for proxy) anonymous proxy (no information about client reported)
+.br
+.B -a1
+(for proxy) anonymous proxy (random client information reported)
+.br
+.B -a2
+(for proxy) generate Via: and X-Forwarded-For: instead of Forwarded:
+.br
+ Also, all options mentioned for 
+.BR proxy (8)
+.BR socks (8)
+.BR pop3p (8)
+.BR imapp (8)
+.BR tcppm (8)
+.BR udppm (8)
+.BR ftppr (8)
+ are also supported.
+.br
+ Portmapping services listen at SRCPORT and connect to DSTADDR:DSTPORT
+HTTP and SOCKS proxies are standard. 
+.br
+ POP3 proxy must be configured as POP3 server and requires username in the form of:
+pop3username@pop3server. If POP3 proxy access must be authenticated, you can
+specify username as proxy_username:proxy_password:POP3_username@pop3server
+.br
+ DNS proxy resolves any types of records but only hostnames are cached. It
+requires \fBnserver\fR/\fBnscache\fR to be configured. If \fBnserver\fR is configured as TCP,
+redirections are applied on connection, so parent proxy may be used to resolve
+names to IP.
+.br
+ FTP proxy can be used as FTP server in any FTP client or configured as FTP
+proxy on a client with FTP proxy support. Username format is one of
+.br
+ FTPuser@FTPServer
+.br
+ FTPuser:FTPpassword@FTPserver
+.br
+ proxyuser:proxypassword:FTPuser:FTPpassword@FTPserver
+.br
+ Please note, if you use FTP client interface for FTP proxy do not add FTPpassword and FTPServer to username, because FTP client does it for you. That is, if you use 3proxy with authentication use proxyuser:proxypassword:FTPuser as FTP username, otherwise do not change original FTP user name
+
+.br
+.BR include
+\fI<path>\fR
+.br
+ Include config file
+
+.br
+.BR config
+\fI<path>\fR
+.br
+ Path to configuration file to use on 3proxy restart or to save configuration.
+
+.br
+.B writable
+.br
+ ReOpens configuration file for write access via Web interface,
+and rereads it. Usually should be first command on config file
+but in combination with config
+it can be used anywhere to open
+alternate config file. Think twice before using it.
+
+.br
+.B end
+.br
+ End of configuration
+
+.br
+.BR log
+[[@|&]\fIlogfile\fR] [\fI<LOGTYPE>\fR]
+.br
+ sets logfile for all gateways
+.br
+ @ (for Unix) use syslog, filename is used as ident name
+.br
+ & use ODBC, filename consists of comma-delimited datasource,username,password (username and password are optional)
+.br
+ radius - use RADIUS for logging
+.br
+ LOGTYPE is one of:
+.br
+  \fBc\fR Minutely
+.br
+  \fBH\fR Hourly
+.br
+  \fBD\fR Daily
+.br
+  \fBW\fR Weekly (starting from Sunday)
+.br
+  \fBM\fR Monthly
+.br
+  \fBY\fR Annually
+.br
+ if logfile is not specified logging goes to stdout. You can specify individual logging options for gateway by using -l
+option in gateway configuration.
+.br
+ log command supports same format specifications for filename template
+as "logformat" (if filename contains \'%\' sign it\'s believed to be template).
+As with "logformat" filename must begin with \'L\' or \'G\' to specify Local or
+Grinwitch time zone for all time-based format specificators.
+
+.br
+.BR rotate
+\fI<n>\fR
+ how many archived log files to keep
+
+.br
+.BR logformat
+\fI<format>\fR
+.br
+ Format for log record. First symbol in format must be L (local time)
+or G (absolute Grinwitch time). 
+It can be preceeded with -XXX+Y where XXX is list of characters to be
+filtered in user input (any non-printable characters are filtered too
+in this case) and Y is replacement character. For example, "-,%+ L" in
+the beginning of logformat means comma and percent are replaced
+with space and all time based elemnts are in local time zone.
+.br
+ You can use:
+
+.br
+  %y Year in 2 digit format
+.br
+  %Y Year in 4 digit format
+.br
+  %m Month number
+.br
+  %o Month abbreviation
+.br
+  %d Day
+.br
+  %H Hour
+.br
+  %M Minute
+.br
+  %S Second
+.br
+  %t Timestamp (in seconds since 01-Jan-1970)
+.br
+  %. milliseconds
+.br
+  %z time zone (from Greenwich)
+.br
+  %D request duration (in milliseconds)
+.br
+  %b average send rate per request (in bytes per second); this speed is typically below the connection speed shown by the download manager.
+.br
+  %B average receive rate per request (in bytes per second); this speed is typically below the connection speed shown by the download manager.
+.br
+  %U Username
+.br
+  %N service Name
+.br
+  %p service Port
+.br
+  %E Error code
+.br
+  %C Client IP
+.br
+  %c Client port
+.br
+  %R Remote IP
+.br
+  %r Remote port
+.br
+  %i Internal IP used to accept client connection
+.br
+  %e External IP used to establish connection
+.br
+  %Q Requested IP
+.br
+  %q Requested port
+.br
+  %n requested hostname
+.br
+  %I bytes In
+.br
+  %O bytes Out
+.br
+  %h Hops (redirections) count
+.br
+  %T service specific Text
+.br
+  %N1-N2T (N1 and N2 are positive numbers) log only fields from N1 through N2 of service-specific text
+.br
+ In the case of ODBC logging, logformat specifies an SQL statement, for example:
+.br
+ logformat "-\'+_Linsert into log (l_date, l_user, l_service, l_in, l_out, l_descr) values (\'%d-%m-%Y %H:%M:%S\', \'%U\', \'%N\', %I, %O, \'%T\')"
+
+.br
+.BR logdump
+\fI<in_traffic_limit>\fR \fI<out_traffic_limit>\fR
+.br
+ Immediately creates additional log records if given amount of incoming/outgoing
+traffic is achieved for connection, without waiting for connection to finish.
+It may be useful to prevent information about long-lasting downloads on server
+shutdown.
+
+.br
+.BR delimchar
+\fI<char>\fR
+.br
+ Sets the delimiter character used to separate username from hostname in proxy
+authentication strings (e.g. for FTP, POP3 proxies). Default is \'@\'. For example,
+to use \'#\' instead: delimchar #. This allows usernames to contain the \'@\' character.
+
+.br
+.BR archiver
+\fI<ext>\fR \fI<commandline>\fR
+.br
+ Archiver to use for log files. <ext> is file extension produced by
+archiver. Filename will be last argument to archiver, optionally you
+can use %A as produced archive name and %F as filename.
+
+.br
+.BR timeouts
+\fI<BYTE_SHORT>\fR \fI<BYTE_LONG>\fR \fI<STRING_SHORT>\fR \fI<STRING_LONG>\fR \fI<CONNECTION_SHORT>\fR \fI<CONNECTION_LONG>\fR \fI<DNS>\fR \fI<CHAIN>\fR \fI<CONNECT>\fR \fI<CONNECTBACK>\fR \fI<LINGER>\fR
+.br
+ Sets timeout values, defaults 1, 5, 30, 60, 180, 1800, 15, 60, 15, 5, 5.
+.br
+ \fBBYTE_SHORT\fR short timeout for single byte, is usually used for receiving single byte from stream.
+.br
+ \fBBYTE_LONG\fR long timeout for single byte, is usually used for receiving first byte in frame (for example first byte in socks request).
+.br
+ \fBSTRING_SHORT\fR short timeout, for character string within stream (for example to wait between 2 HTTP headers)
+.br
+ \fBSTRING_LONG\fR long timeout, for first string in stream (for example to wait for HTTP request).
+.br
+ \fBCONNECTION_SHORT\fR inactivity timeout for short connections (HTTP, POP3, etc).
+.br
+ \fBCONNECTION_LONG\fR inactivity timeout for long connection (SOCKS, portmappers, etc).
+.br
+ \fBDNS\fR timeout for DNS request before requesting next server
+.br
+ \fBCHAIN\fR timeout for reading data from chained connection
+.br
+ \fBLINGER\fR timeout to deliver buffered data after one of the sides has closed
+its sending side, also used as SO_LINGER value on outgoing connections. Too small
+value may cause the tail of the data to be lost on slow connections, too large one
+delays release of the sockets.
+.br
+ default timeouts 1 5 30 60 180 1800 15 60 15 5 5
+
+.br
+.BR maxseg
+\fI<value>\fR
+.br
+ Sets TCP maximum segment size (MSS) for outgoing connections. This can be used
+to work around path MTU discovery issues or to optimize traffic for specific
+network conditions.
+
+.br
+.BR radius
+\fI<NAS_SECRET>\fR \fI<radius_server_1\fR[:\fIport\fR][/\fIlocal_address_1\fR]\fR \fI<radius_server_2\fR[:\fIport\fR][/\fIlocal_address_2\fR]\fR
+.br
+ Configures RADIUS servers to be used for logging and authentication (log and auth types
+must be set to radius). port and local address to use with given server may be specified.
+.br
+ Attributes within request: User-Name, Password: (username and password if presented by client),
+Service Type: Authenticate-Only,
+NAS-Port-Type: NAS-Port-Virtual,
+NAS-Port-ID: (proxy service port, e.g. 1080),
+NAS-IPv6-Address / NAS-IP-Address: (proxy interface accessed by client),
+NAS-Identifier: (text identifing proxy, e.g. PROXY or SOCKSv5),
+Framed-IPv6-Address / Framed-IP-Address: (IP address of the client),
+Called-Station-ID: (requested Hostname, if presents),
+Login-Service: (type of request, e.g. 1001 - SOCKS CONNECT, 1010 - HTTP GET, 1013 - HTTP CONNECT),
+Login-TCP-Port: (requested port),
+Login-IPv6-Host / Login-IP-Host: (requested IP). 
+.br
+ Supported reply attributes for authentication:
+Framed-IP-Address / Framed-IPv6-Address (IP to assign to user), Reply-Message.
+Use \fBauthcache\fR to speedup authentication. RADIUS feature is currently experimental.
+
+.br
+.BR nserver
+\fI<ipaddr>\fR[:\fIport\fR][/\fItcp\fR]
+.br
+ Nameserver to use for name resolutions. If none specified
+system routines for name resolution is
+used. Optional port number may be specified.
+If optional /tcp is added to IP address, name resolution is
+performed over TCP.
+
+.br
+.BR authnserver
+\fI<ipaddr>\fR[:\fIport\fR][/\fItcp\fR]
+.br
+ Nameserver to use for DNS-based authentication (e.g. dnsname auth type).
+If not specified, nserver is used. The syntax is the same as for nserver.
+
+.br
+.BR nscache
+\fI<cachesize>\fR
+.BR nscache6
+\fI<cachesize>\fR
+.br
+ Cache \fI<cachesize>\fR records for name resolution (\fBnscache\fR for IPv4,
+\fBnscache6\fR for IPv6). The cache size should usually be large enough
+(for example, 65536).
+
+.br
+.BR nsrecord
+\fI<hostname>\fR \fI<hostaddr>\fR
+.br
+ Adds static record to nscache. \fBnscache\fR must be enabled. If 0.0.0.0
+is used as a hostaddr host will never resolve, it can be used to
+blacklist something or together with 
+.B dialer
+command to set up UDL for dialing.
+
+.br
+.B fakeresolve
+.br
+ All names are resolved to the 127.0.0.2 address. Useful if all requests are
+redirected to a parent proxy with \fBhttp\fR, \fBsocks4+\fR, \fBconnect+\fR or \fBsocks5+\fR.
+
+.br
+.BR dialer
+\fI<progname>\fR
+.br
+ Execute progname if external name can\'t be resolved.
+Hint: if you use nscache, dialer may not work, because names will
+be resolved through cache. In this case you can use something like
+http://dial.right.now/ from browser to set up connection.
+
+
+.br
+.BR internal
+\fI<ipaddr>\fR
+.br
+ sets ip address of internal interface. This IP address will be used
+to bind gateways. Alternatively you can use -i option for individual
+gateways. Since 0.8 version, IPv6 address may be used.
+.br
+Unix domain sockets are supported with the syntax
+.I unix:/path/to/socket
+(e.g., internal unix:/var/run/3proxy.sock). On Linux, abstract (fileless)
+Unix sockets are supported with the syntax
+.I unix:@socketname
+(e.g., internal unix:@3proxy). When using Unix sockets, the socket file
+is automatically created and removed on service start/stop.
+
+.br
+.BR external
+\fI<ipaddr>\fR
+.br
+ sets ip address of external interface. This IP address will be source
+address for all connections made by proxy. Alternatively you can use -e
+option to specify individual address for gateway. Since 0.8 version
+External or \fB-e\fR can be given twice: once with IPv4 and once with IPv6 address.
+   
+.br
+.BR maxconn
+\fI<number>\fR
+.br
+ sets the maximum number of simultaneous connections to each service
+started after this command at the network level. Default is 100.
+.br
+ To limit clients, use \fBconnlim\fR instead. \fBmaxconn\fR will silently ignore
+new connections, while \fBconnlim\fR will report back to the client that
+the connection limit has been reached.
+
+.br
+.B backlog
+.br
+ sets the listening socket backlog of new connections. Default is
+1 + \fBmaxconn\fR/8. Maximum value is capped by kernel tunable somaxconn.
+
+.br
+.B service
+.br
+ (deprecated). Indicates that 3proxy should behave as a Windows 95/98/NT/2000/XP
+service; has no effect under Unix. Not required for 3proxy 0.6 and above. If
+you upgraded from a previous version of 3proxy, use --remove and --install
+to reinstall the service.
+
+.br
+.B daemon
+.br
+ Should be specified to close the console. Do not use \'daemon\' with \'service\'.
+At least under FreeBSD, \fBdaemon\fR should precede any proxy service
+and log commands to avoid socket problems. Always place it in the beginning
+of the configuration file.
+
+.br
+.BR auth
+\fI<authtype>\fR [...]
+.br
+ Type of user authorization. Currently supported:
+.br
+ \fBnone\fR - no authentication or authorization required.
+.br
+ Note: if auth is none, any IP-based limitation, redirection, etc. will not work.
+This is the default authentication type
+.br
+ \fBiponly\fR - authentication by access control list with username ignored.
+ Appropriate for most cases
+.br
+ \fBuseronly\fR - authentication by username without checking for any password with
+authorization by ACLs. Useful for e.g. SOCKSv4 proxy.
+.br
+ \fBdnsname\fR - authentication by DNS hostname with authorization by ACLs.
+The DNS hostname is resolved via a PTR (reverse) record and validated (the resolved
+name must resolve to the same IP address). It\'s recommended to use authcache by
+IP for this authentication.
+NB: there is no password check; the name may be spoofed.
+.br
+ \fBstrong\fR - username/password authentication required. It will work with
+SOCKSv5, FTP, POP3 and HTTP proxy. 
+.br
+ \fBcache\fR - cached authentication, may be used with \'authcache\'.
+.br
+ \fBcacheacl\fR - cached authentication, same as \fBcache\fR but the ACL
+authorization result is also cached and not re-evaluated on each request. Faster
+than \fBcache\fR, but ACL changes do not take effect for cached users until the
+cache entry expires. Use \fBcache\fR if ACLs may change during the cache lifetime.
+Because the ACL is not walked on a cache hit, no redirection is applied to a
+request served from the cache: it is sent directly instead of through the
+\fBparent\fR proxy of the matching ACL entry, with no error reported. Do not use
+\fBcacheacl\fR together with parent proxies, use \fBcache\fR instead. The only
+redirection type which survives is \fBextip\fR, and only if \fBext\fR is a part
+of the \fBauthcache\fR key, because the external address is then restored from
+the cache entry.
+.br
+ \fBradius\fR - authentication with RADIUS.
+.br
+ Plugins may add additional authentication types.
+
+.br
+ It\'s possible to use multiple authentication types in the same command. E.g.
+.br
+ auth iponly strong
+.br
+ In this case, \'strong\' authentication will be used only if resource
+access cannot be performed with \'iponly\' authentication, that is, a username is
+required in the ACL. It\'s useful to protect access to some resources with
+a password while allowing passwordless access to other resources, or to use
+IP-based authentication for dedicated laptops and request a username/password for
+shared ones.
+
+.br
+.BR authcache
+\fI<cachtype>\fR \fI<cachtime>\fR \fI<cachesize>\fR
+.br
+ Cache authentication information for a given amount of time (cachetime) in seconds.
+cachesize limits number of cache entries.
+Cachetype is one of:
+.br
+ \fBip\fR - after successful authentication all connections during caching time
+from same IP are assigned to the same user, username is not requested.
+.br
+ \fBip,user\fR username is requested and all connections from the same IP are
+assigned to the same user without actual authentication.
+.br
+ \fBuser\fR - same as above, but IP is not checked.
+.br
+ \fBuser,password\fR - both username and password are checked against cached ones.
+.br
+ \fBlimit\fR - limit user to use only one ip, \'ip\' and \'user\' are required
+.br
+ \fBacl\fR - only use cached auth if user access service with same ACL
+.br
+ \fBext\fR - cache external IP
+.br
+ \fBdstaddr\fR - cache by destination IP address
+.br
+ \fBdstport\fR - cache by destination port
+.br
+ \fBdsthost\fR - cache by destination hostname
+.br
+ \fBdstoper\fR - cache by destination operation (e.g. HTTP method)
+.br
+ \fBsrvaddr\fR - cache by service (listener) address
+.br
+ \fBsrvport\fR - cache by service (listener) port
+.br
+Multiple types can be combined (e.g. \fBip,user,dstaddr,dstport\fR).
+.br
+With \fBcacheacl\fR the ACL result is not re-evaluated on a cache hit, so every
+field the ACL limits must be a part of the cache key, otherwise the result
+cached for one request is applied to a different one: \fBuser\fR/\fBpass\fR
+for the userlist, \fBip\fR for the sourcelist, \fBdstaddr\fR/\fBdsthost\fR
+for the targetlist, \fBdstport\fR for the targetportlist and \fBdstoper\fR
+for the operationlist. It is especially important for SOCKSv5 UDP traffic,
+where the destination of every datagram is authorized: without \fBdstaddr\fR
+and \fBdstport\fR in the key the result cached for one destination is applied
+to any other destination and the destination is not checked at all, see
+\fBallow\fR.
+.br
+Use auth type \fBcache\fR (or \fBcacheacl\fR) for cached authentication
+
+.br
+.BR allow
+\fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+.BR deny
+\fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+.BR redirect
+\fI<ip>\fR \fI<port>\fR \fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+ Access control entries. All lists are comma-separated, no spaces are
+allowed. Usernames are case sensitive (if used with authtype nbname
+username must be in uppercase). Source and target lists may contain
+IP addresses (W.X.Y.Z), ranges A.B.C.D - W.X.Y.Z (since 0.8) or CIDRs (W.X.Y.Z/L).
+Since 0.6, the targetlist may also contain host names,
+instead of addresses. It\'s possible to use a wildmask in
+the beginning and at the end of the hostname, e.g. *badsite.com or *badcontent*.
+The hostname is only checked if a hostname is present in the request.
+Targetportlist may contain ports (X) or port ranges lists (X-Y). For any field *
+sign means ANY. If access list is empty it\'s assumed to be
+.br
+ allow *
+.br
+ If access list is not empty last item in access list is assumed to be
+.br
+ deny *
+.br
+ You may want explicitly add deny * to the end of access list to prevent
+HTTP proxy from requesting user\'s password.
+Access lists are checked after user have requested any resource.
+If you want 3proxy to reject connections from specific addresses
+immediately without any conditions you should either bind proxy
+to appropriate interface only or to use ip filters.
+
+.br
+ Operation is one of:
+.br
+ \fBCONNECT\fR establish outgoing TCP connection
+.br
+ \fBBIND\fR bind TCP port for listening
+.br
+ \fBUDPASSOC\fR make UDP association
+.br
+ \fBICMPASSOC\fR make ICMP association (for future use)
+.br
+ \fBHTTP_GET\fR HTTP GET request
+.br
+ \fBHTTP_PUT\fR HTTP PUT request
+.br
+ \fBHTTP_POST\fR HTTP POST request
+.br
+ \fBHTTP_HEAD\fR HTTP HEAD request
+.br
+ \fBHTTP_CONNECT\fR HTTP CONNECT request
+.br
+ \fBHTTP_OTHER\fR over HTTP request
+.br
+ \fBHTTP\fR matches any HTTP request except HTTP_CONNECT
+.br
+ \fBHTTPS\fR same as HTTP_CONNECT
+.br
+ \fBFTP_GET\fR FTP get request
+.br
+ \fBFTP_PUT\fR FTP put request
+.br
+ \fBFTP_LIST\fR FTP list request
+.br
+ \fBFTP_DATA\fR FTP data connection. Note: FTP_DATA requires access to dynamic
+non-privileged (1024-65535) ports on the remote side.
+.br
+ \fBFTP\fR matches any FTP/FTP Data request
+.br
+ \fBADMIN\fR access to administration interface
+
+.br
+ Weekdays are week day numbers or periods, 0 or 7 means Sunday, 1 is Monday, 1-5 means Monday through Friday.
+.br
+ Timeperiodlists is a list of time
+periods in HH:MM:SS-HH:MM:SS format. For example, 00:00:00-08:00:00,17:00:00-24:00:00 lists non-working hours.
+.br
+ A SOCKSv5 UDP ASSOCIATE request carries no destination, the destination of
+every datagram is taken from the datagram itself. 3proxy authorizes the
+destination of every datagram, so ACLs limiting the destination address, the
+destination host name or the destination port do apply to UDP traffic, unless
+the \fB-U\fR option of the \fBsocks\fR service says otherwise.
+.br
+ ACLs are only checked for the datagrams sent by the client. A datagram received
+on the association is relayed to the client without an ACL check: with a parent
+proxy only the datagrams from the parent are accepted, an association without a
+parent accepts a datagram from any source. The source reported to the client is
+the actual source of the datagram. The address in the log record is the destination the
+client sent the datagrams to, the source of the datagrams received on the
+association is not logged.
+.br
+ A client may use a single association to reach many destinations. An ACL entry
+which limits the destination silently drops the datagrams to every other
+destination, so limiting the destination of UDP traffic can break such clients
+in a way which is hard to diagnose. Limit it only when it is really required.
+.br
+ Bandwidth limiters (\fBbandlimin\fR, \fBbandlimout\fR) and traffic counters
+(\fBcountin\fR, \fBcountout\fR) which limit the destination are selected when
+the destination is authorized, so within an UDP association they are selected
+for the destination of the first datagram and are not re-selected for every
+following destination. They can not be applied per destination to the incoming
+UDP traffic at all, because an incoming datagram is not matched against any
+destination.
+.br
+ Only \fBsocks5\fR and \fBsocks5+\fR parents can be used for UDP. Because
+every new destination is authorized, use \fBauthcache\fR, especially with
+\'strong\', RADIUS or plugin authentication: \fBcacheacl\fR with the
+destination in the cache key if no parent proxy is used, \fBcache\fR
+otherwise, see \fBcacheacl\fR.
+
+.br
+.BR parent
+\fI<weight>\fR \fI<type>\fR \fI<ip>\fR \fI<port>\fR \fI<username>\fR \fI<password>\fR
+.br
+ this command must follow "allow" rule. It extends last allow rule to
+build proxy chain. Proxies may be grouped. Proxy inside the
+group is selected randomly. If few groups are specified one proxy
+is randomly picked from each group and chain of proxies is created
+(that is second proxy connected through first one and so on).
+Weight is used to group proxies. Weight is a number between 1 and 1000.
+Weights are summed and proxies are grouped together until the weight of
+the group is 1000. That is:
+.br
+ allow *
+.br
+ parent 500 socks5 192.168.10.1 1080
+.br
+ parent 500 connect 192.168.10.1 3128
+.br
+ makes 3proxy to randomly choose between 2 proxies for all outgoing
+connections. These 2 proxies form 1 group (summarized weight is 1000).
+.br
+ allow * * * 80
+.br
+ parent 1000 socks5 192.168.10.1 1080
+.br
+ parent 1000 connect 192.168.20.1 3128
+.br
+ parent 300 socks4 192.168.30.1 1080
+.br
+ parent 700 socks5 192.168.40.1 1080
+.br
+ creates chain of 3 proxies: 192.168.10.1, 192.168.20.1 and third
+is (192.168.30.1 with probability of 0.3 or 192.168.40.1
+with probability of 0.7) for outgoing web connections. Chains are only applied to new connections, pipelined (keep-alive) requests in the same connection use the same chain.
+
+.br
+ type is one of:
+.br
+ \fBextip\fR does not actually redirect the request; it sets the external address for this request to \fI<ip>\fR. It can be chained with another parent type. It's useful to set the external IP based on ACL or make it random.
+.br
+ \fBtcp\fR simply redirect connection. TCP is always last in chain. This type of proxy is a simple TCP redirection, it does not support parent authentication.
+.br
+ \fBhttp\fR redirect to HTTP proxy. HTTP is always the last chain. It should only be used with http (proxy) service,
+if used with different service, it works as tcp redirection.
+.br
+ \fBpop3\fR redirect to POP3 proxy (only local redirection is supported, can only be used as a first hop in chaining)
+.br
+ \fBftp\fR redirect to FTP proxy (only local redirection is supported, can only be used as a first hop in chaining)
+.br
+ \fBconnect\fR parent is HTTP CONNECT method proxy
+.br
+ \fBconnect+\fR parent is HTTP CONNECT proxy with name resolution (hostname is used instead of IP if available)
+.br
+ \fBsocks4\fR parent is SOCKSv4 proxy
+.br
+ \fBsocks4+\fR parent is SOCKSv4 proxy with name resolution (SOCKSv4a)
+.br
+ \fBsocks5\fR parent is SOCKSv5 proxy
+.br
+ \fBsocks5+\fR parent is SOCKSv5 proxy with name resolution
+.br
+ \fBsocks4b\fR parent is SOCKS4b (broken SOCKSv4 implementation with shortened
+server reply; I never saw this kind of server, but they say there are some).
+Normally you should not use this option. Do not confuse this option with
+SOCKSv4a (\fBsocks4+\fR).
+.br
+ \fBsocks5b\fR parent is SOCKS5b (broken SOCKSv5 implementation with shortened
+server reply. I think you will never find it useful). Never use this option
+unless you know exactly you need it.
+.br
+ \fBadmin\fR redirect request to local \'admin\' service (with -s parameter).
+.br
+\fBha\fR send HAProxy PROXY protocol v1 header to the next parent proxy (or to
+the destination if \fBha\fR is used alone). Place \fBha\fR before the parent
+that should receive the header; after the header is sent, negotiation of that
+parent protocol continues (SOCKS, CONNECT, etc.). Useful for passing client IP
+information to the parent proxy.
+Example:
+.br
+ parent 1000 ha 0.0.0.0 0
+.br
+ parent 1000 socks5 parent.example.com 1080
+.br
+Use "+" proxy only with \fBfakeresolve\fR option
+.br
+Any parent type above can be suffixed with \fBs\fR (e.g. \fBhttps\fR,
+\fBtcps\fR, \fBsocks5s\fR, \fBconnect+s\fR) to establish a TLS-encrypted
+connection to the parent proxy. Requires SSL/TLS support (WITH_SSL) and is
+used with \fBssl_client_mode 3\fR, which only handshakes TLS for \fBs\fR-suffixed
+parents.
+.br
+
+ IP and port are ip addres and port of parent proxy server.
+If IP is zero, ip is taken from original request, only port is changed.
+If port is zero, it\'s taken from original request, only IP is changed.
+If both IP and port are zero - it\'s a special case of local redirection,
+it works only with
+.B socks
+proxy. In case of local redirection request is redirected to different service,
+.B ftp
+locally redirects to
+.B ftppr
+.B pop3
+locally redirects to
+.B pop3p
+.B imap
+locally redirects to
+.B imapp
+.B http
+locally redirects to
+.B proxy
+.B admin
+locally redirects to the admin -s service.
+.br
+Unix domain sockets can be used instead of IP address with the syntax
+.I unix:/path/to/socket
+(e.g., parent 1000 socks5 unix:/var/run/parent.sock 1080). On Linux,
+abstract (fileless) Unix sockets are supported with
+.I unix:@socketname
+syntax (e.g., parent 1000 http unix:@parent.proxy 3128). When using Unix
+sockets, the port number is ignored but must be specified for syntax compatibility.
+
+.br
+ Main purpose of local redirections is to have the requested resource
+(URL or POP3 username) logged and protocol-specific filters applied.
+In case of local redirection, ACLs are reviewed twice: first, by the SOCKS proxy up to the \'parent\'
+command and then by the gateway service the connection is
+redirected to (HTTP, FTP or POP3) after the \'parent\' command. It means
+an additional \'allow\' command is required for redirected requests, for
+example:
+.br
+ allow * * * 80
+.br
+ parent 1000 http 0.0.0.0 0
+.br
+ allow * * * 80 HTTP_GET,HTTP_POST
+.br
+ socks
+.br
+ redirects all SOCKS requests with target port 80 to local HTTP proxy,
+local HTTP proxy parses requests and allows only GET and POST requests.
+.br
+ parent 1000 http 1.2.3.4 0
+.br
+ Changes the external address for a given connection to 1.2.3.4 (equivalent to \fB-e1.2.3.4\fR)
+.br
+ Optional username and password are used to authenticate on parent
+proxy. Username of \'*\' means username must be supplied by user.
+
+.br
+.BR parentretries
+\fI<number>\fR
+.br
+ Number of retries to connect to parent proxy. Default is 1.
+
+
+.br
+.BR nolog
+\fI<n>\fR
+.br
+ extends last allow or deny command to prevent logging, e.g.
+.br
+allow * * 192.168.1.1
+.br
+nolog
+
+
+.br
+.BR weight
+\fI<n>\fR
+.br
+ extends last allow or deny command to set weight for this request
+.br
+ allow * * 192.168.1.1
+.br
+ weight 100
+.br
+ Weight may be used for different purposes.
+
+
+.br
+.B force
+.br
+.B noforce
+.br
+ If force is specified for service, configuration reload will require all current
+sessions of this service to be re-authenticated. If ACL is changed or user account
+is removed, old connections which do not match current are closed.
+noforce allows to keep previously authenticated connections.
+
+.br
+.BR bandlimin
+\fI<rate>\fR \fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+.BR nobandlimin
+\fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+.BR bandlimout
+\fI<rate>\fR \fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+.BR nobandlimout
+\fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+ bandlim sets a bandwidth limitation filter to \fI<rate>\fR bps (bits per second).
+If you want to specify bytes per second, multiply your value by 8.
+bandlim rules act in the same manner as allow/deny rules, except for
+one thing: bandwidth limiting is applied to all services, not to some
+specific service. 
+\fBbandlimin\fR and \fBnobandlimin\fR apply to incoming traffic
+.br
+\fBbandlimout\fR and \fBnobandlimout\fR apply to outgoing traffic
+.br
+If you want to ratelimit your clients with IPs 192.168.10.16/30 (4
+addresses) to 57600 bps, you have to specify 4 rules like
+.br
+ bandlimin 57600 * 192.168.10.16
+.br
+ bandlimin 57600 * 192.168.10.17
+.br
+ bandlimin 57600 * 192.168.10.18
+.br
+ bandlimin 57600 * 192.168.10.19
+.br
+ and each of your clients will have a 56K channel. If you specify
+.br
+ bandlimin 57600 * 192.168.10.16/30
+.br
+ you will have a 56K channel shared between all clients.
+If you want, for example, to limit all speed except access to POP3, you can use
+.br
+ nobandlimin * * * 110
+.br
+ before the rest of bandlim rules.
+
+.br
+.BR connlim
+\fI<rate>\fR \fI<period>\fR \fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+.BR noconnlim
+\fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+ connlim sets connections rate limit per time period for traffic
+pattern controlled by ACL. Period is in seconds. If period is 0,
+\fBconnlim\fR limits a number of parallel connections.
+.br
+ connlim 100 60 * 127.0.0.1
+.br
+ allows 100 connections per minute for 127.0.0.1.
+.br
+ connlim 20 0 * 127.0.0.1
+.br
+ allows 20 simultaneous connections for 127.0.0.1.
+.br
+ Like with \fBbandlimin\fR, if an individual limit is required per client, a separate
+rule must be added for every client. Like with nobandlimin, noconnlim adds an
+exception.
+
+
+
+.br
+.BR counter
+\fI<filename>\fR \fI<reporttype>\fR \fI<reportname>\fR
+.br
+.BR countin
+\fI<number>\fR \fI<type>\fR \fI<limit>\fR \fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+.BR nocountin
+\fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+.BR countout
+\fI<number>\fR \fI<type>\fR \fI<limit>\fR \fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+.BR nocountout
+\fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+.BR countall
+\fI<number>\fR \fI<type>\fR \fI<limit>\fR \fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+.BR nocountall
+\fI<userlist>\fR \fI<sourcelist>\fR \fI<targetlist>\fR \fI<targetportlist>\fR \fI<operationlist>\fR
+\fI<weekdayslist>\fR \fI<timeperiodslist>\fR
+.br
+
+ counter, countin, nocountin, countout, nocountout, countall,
+nocountall commands are used to set a traffic limit
+in MB for a period of time (day, week or month). Filename is a path
+to a special file where traffic information is permanently stored.
+The number is the sequential number of the record in this file. If the number is 0,
+this counter is not preserved in the counter file (that is,
+if the proxy is restarted, all counters with 0 are flushed); otherwise, it
+should be a unique sequential number which points to the position of
+the counter within the file.
+Type specifies a type of counter. Type is one of:
+.br
+ \fBH\fR - counter is reset hourly
+.br
+ \fBD\fR - counter is reset daily
+.br
+ \fBW\fR - counter is reset weekly
+.br
+ \fBM\fR - counter is reset monthly
+.br
+ reporttype/reportname may be used to generate traffic reports.
+Reporttype is one of D, W, M, H (hourly) and reportname specifies the filename
+template for reports. The report is a text file with counter values in
+the format:
+.br
+ \fI<COUNTERNUMBER>\fR \fI<TRAF>\fR
+.br
+ The rest of parameters is identical to \fBbandlim\fR/\fBnobandlim\fR.
+
+.br
+.BR users
+\fIusername\fR[:\fIpwtype\fR:\fIpassword\fR] ...
+.br
+ pwtype is one of:
+.br
+ none (empty) - use system authentication
+.br
+ \fBCL\fR - password is cleartext
+.br
+ \fBCR\fR - password is crypt-style password. \fB$1$\fR prefix uses MD5-crypt
+(requires OpenSSL), \fB$3$\fR prefix uses BLAKE2b-crypt (always available, see
+.BR 3proxy_crypt (8))
+.br
+ \fBNT\fR - password is NT password (in hex)
+.br
+ example:
+.br
+ users test1:CL:password1 "test2:CR:$1$lFDGlder$pLRb4cU2D7GAT58YQvY49."
+.br
+ users test3:NT:BD7DFBF29A93F93C63CB84790DA00E63
+.br
+ users "test4:CR:$3$salt$G47yV9w...."
+.br
+ Note: double quotes are required because the password contains a $ sign.
+
+.br
+.B flush
+.br
+ empty the active access list. The access list must be flushed every time you create a
+new access list for a new service. For example:
+.br
+ allow *
+.br
+ pop3p
+.br
+ flush
+.br
+ allow * 192.168.1.0/24
+.br
+ socks
+.br
+ sets different ACLs for
+.B pop3p
+and
+.B socks
+
+.br
+.BR system
+\fI<command>\fR
+.br
+ execute system command
+
+.br
+.BR pidfile
+\fI<filename>\fR
+.br
+ write pid of current process to file. It can be used to manipulate
+3proxy with signals under Unix. Currently next signals are available:
+
+.br
+.BR monitor
+\fI<filename>\fR
+.br
+ If file monitored changes in modification time or size, 3proxy reloads
+configuration within one minute. Any number of files may be monitored.
+
+.br
+.BR setuid
+\fI<uid>\fR
+.br
+ calls setuid(uid), uid can be numeric or since 0.9 username. Unix only. Warning: under some Linux
+kernels setuid() works for current thread only. It makes it impossible to suid
+for all threads.
+
+.br
+.BR setgid
+\fI<gid>\fR
+.br
+ calls setgid(gid), gid can be numeric or since 0.9 groupname. Unix only.
+
+.br
+.BR chroot
+\fI<path>\fR [\fI<uid>\fR] [\fI<gid>\fR]
+.br
+ calls chroot(path) and sets gid/uid. Unix only. uid/gid supported since 0.9, can be numeric or username/groupname
+
+.br
+.BR stacksize
+\fI<value_to_add_to_default_stack_size>\fR
+.br
+ Change the default size for thread stacks. May be required in some situations,
+e.g. with non-default plugins, or on some platforms (some FreeBSD versions
+may require adjusting the stack size due to an incorrectly defined value in system
+header files; this value is also often required to be changed for ODBC and
+PAM support on Linux). If you experience 3proxy
+crash on request processing, try to set some positive value. You may start with
+stacksize 65536
+and then find the minimal value for the service to work. If you experience
+memory shortage, you can try to experiment with negative values.
+.br
+ With SQL logging (log &ODBC_string) the value is automatically raised to
+32768 if it is smaller, because ODBC drivers require more stack. A
+.BR stacksize
+command placed after the
+.BR log
+command overrides this.
+.br
+ The base stack size the value is added to is 49152. On FreeBSD, NetBSD,
+OpenBSD and DragonFly it is 65536, because libc functions such as vfprintf()
+called by syslog() use significantly more stack there. The result is never
+lowered below PTHREAD_STACK_MIN, so a large negative value can not disable
+the thread stack.
+
+.SH PLUGINS
+
+.br
+.BR plugin
+\fI<path_to_shared_library>\fR \fI<function_to_call>\fR [\fI<arg1>\fR ...]
+.br
+ Loads specified library and calls given export function with given arguments,
+as
+.br
+ int functions_to_call(struct pluginlink * pl, int argc, char * argv[]);
+.br
+ function_to_call must return 0 in case of success, value > 0 to indicate error.
+
+.br
+.BR filtermaxsize
+\fI<max_size_of_data_to_filter>\fR
+.br
+ If Content-length (or another data length) is greater than the given value, no
+data filtering will be performed through filtering plugins to avoid data
+corruption and/or Content-Length changing. Default is 1MB (1048576).
+
+.SH SSL/TLS SUPPORT
+SSL/TLS support is built into 3proxy (since 0.9.7) when compiled with OpenSSL
+(WITH_SSL). Previously available as SSLPlugin, the functionality is now integrated
+into the main binary. The plugin line is no longer required.
+
+SSL/TLS can be used for:
+- transparent MITM (Man-in-the-Middle) for TLS traffic inspection
+- https:// proxy (TLS-encrypted connection between client and proxy)
+- TLS client connections to upstream servers with certificate authentication
+- mTLS (mutual TLS) requiring client certificates
+
+.SS MITM Commands
+.br
+.BR ssl_mitm
+- spoof certificates for services started below. Usage without ssl_client_verify is insecure.
+.br
+.BR ssl_nomitm
+- do not spoof certificates for services started below
+
+.SS Server TLS Commands
+.br
+.BR ssl_serv
+(or ssl_server) - require TLS connection from clients for services below
+.br
+.BR ssl_noserv
+(or ssl_noserver) - do not require TLS connection from clients for services below
+
+.SS Client TLS Commands
+.br
+.BR ssl_cli
+(or ssl_client) - establish TLS connection to upstream server for services below
+.br
+.BR ssl_nocli
+(or ssl_noclient) - do not establish TLS connection to upstream server for services below
+
+.SS SSL Parameters
+.br
+.BR ssl_server_cert
+\fI/path/to/cert\fR - Server certificate (should not be self-signed, must contain SAN) for ssl_serv
+.br
+.BR ssl_server_key
+\fI/path/to/key\fR - Server certificate key for ssl_server_cert or generated MITM certificate
+.br
+.BR ssl_client_cert
+\fI/path/to/cert\fR - Client certificate for authentication on upstream server (used with ssl_cli)
+.br
+.BR ssl_client_key
+\fI/path/to/key\fR - Client certificate key for ssl_client_cert
+.br
+.BR ssl_client_ciphersuites
+\fIciphersuites_list\fR - TLS client ciphers for TLS 1.3
+.br
+.BR ssl_server_ciphersuites
+\fIciphersuites_list\fR - TLS server ciphers for TLS 1.3
+.br
+.BR ssl_client_cipher_list
+\fIciphers_list\fR - TLS client ciphers for TLS 1.2 and below
+.br
+.BR ssl_server_cipher_list
+\fIciphers_list\fR - TLS server ciphers for TLS 1.2 and below
+.br
+.BR ssl_client_min_proto_version
+\fItls_version\fR - TLS client minimum TLS version (e.g., TLSv1.2)
+.br
+.BR ssl_server_min_proto_version
+\fItls_version\fR - TLS server minimum TLS version
+.br
+.BR ssl_client_max_proto_version
+\fItls_version\fR - TLS client maximum TLS version
+.br
+.BR ssl_server_max_proto_version
+\fItls_version\fR - TLS server maximum TLS version
+.br
+.BR ssl_client_verify
+- verify the certificate for the upstream server (used with ssl_mitm or ssl_cli)
+.br
+.BR ssl_client_no_verify
+- do not verify the certificate for the upstream server (default)
+.br
+.BR ssl_server_verify
+- require client certificate authentication (mTLS) for ssl_serv
+.br
+.BR ssl_server_no_verify
+- do not require client certificate (default)
+.br
+.BR ssl_server_ca_file
+\fI/path/to/cafile\fR - CA certificate file for MITM
+.br
+.BR ssl_server_ca_key
+\fI/path/to/cakey\fR - key for ssl_server_ca_file MITM CA
+.br
+.BR ssl_server_ca_dir
+\fI/path/to/cadir\fR - CA directory for ssl_server_verify
+.br
+.BR ssl_server_ca_store
+\fI/path/to/castore\fR - CA store for ssl_server_verify (OpenSSL 3.0+)
+.br
+.BR ssl_client_ca_file
+\fI/path/to/cafile\fR - CA file for ssl_client_verify
+.br
+.BR ssl_client_ca_dir
+\fI/path/to/cadir\fR - CA directory for ssl_client_verify
+.br
+.BR ssl_client_ca_store
+\fI/path/to/castore\fR - CA store for ssl_client_verify (OpenSSL 3.0+)
+.br
+.BR ssl_client_sni
+\fIhostname\fR - SNI hostname to send to upstream server
+.br
+.BR ssl_client_alpn
+\fIprotocol1 protocol2 ...\fR - ALPN protocols to negotiate with upstream server
+.br
+.BR ssl_client_mode
+\fImode\fR - when to establish TLS connection: 0 - on connect (default), 1 - after authentication, 2 - before data, 3 - only for secure parent types (ending with 's')
+.br
+.BR ssl_certcache
+\fI/path/to/cache/\fR - location for the generated MITM certificates cache
+
+.SH PCRE FILTERING
+PCRE (Perl Compatible Regular Expressions) filtering is built into 3proxy
+(since 0.9.7) when compiled with PCRE2 support (WITH_PCRE). Previously
+available as PCREPlugin, the functionality is now integrated into the main
+binary. The plugin line is no longer required.
+
+PCRE filtering allows creating matching and replacement rules with regular
+expressions for client requests, headers, and data.
+
+.SS PCRE Commands
+.br
+.BR pcre
+\fITYPE FILTER_ACTION REGEXP [ACE]\fR
+.br
+Apply a rule for matching regular expression.
+.br
+.BR pcre_rewrite
+\fITYPE FILTER_ACTION REGEXP REWRITE_EXPRESSION [ACE]\fR
+.br
+Match and replace with rewrite expression.
+.br
+.BR pcre_extend
+\fIFILTER_ACTION [ACE]\fR
+.br
+Extend the ACL of the last pcre or pcre_rewrite command by adding an additional ACE.
+.br
+.BR pcre_options
+\fIOPTION1 [OPTION2 ...]\fR
+.br
+Set matching options. Both PCRE2 native options and PCRE compatibility options
+are supported. PCRE options are mapped to their PCRE2 equivalents for backward
+compatibility.
+.br
+PCRE2 options: PCRE2_CASELESS, PCRE2_MULTILINE, PCRE2_DOTALL, PCRE2_EXTENDED,
+PCRE2_DOLLAR_ENDONLY, PCRE2_UNGREEDY, PCRE2_UTF, PCRE2_UCP, PCRE2_NO_AUTO_CAPTURE,
+PCRE2_FIRSTLINE, PCRE2_DUPNAMES, PCRE2_MATCH_UNSET_BACKREF, PCRE2_ALT_BSUX,
+PCRE2_ALT_CIRCUMFLEX, PCRE2_ALT_VERBNAMES, PCRE2_USE_OFFSET_LIMIT, PCRE2_EXTENDED_MORE,
+PCRE2_LITERAL, PCRE2_MATCH_INVALID_UTF.
+.br
+PCRE compatibility options: PCRE_CASELESS, PCRE_MULTILINE, PCRE_DOTALL, PCRE_EXTENDED,
+PCRE_ANCHORED, PCRE_DOLLAR_ENDONLY, PCRE_EXTRA, PCRE_NOTBOL, PCRE_NOTEOL, PCRE_UNGREEDY,
+PCRE_NOTEMPTY, PCRE_UTF8, PCRE_NO_AUTO_CAPTURE, PCRE_NO_UTF8_CHECK, PCRE_AUTO_CALLOUT,
+PCRE_PARTIAL, PCRE_DFA_SHORTEST, PCRE_DFA_RESTART, PCRE_FIRSTLINE, PCRE_DUPNAMES,
+PCRE_NEWLINE_CR, PCRE_NEWLINE_LF, PCRE_NEWLINE_CRLF, PCRE_NEWLINE_ANY, PCRE_NEWLINE_ANYCRLF,
+PCRE_BSR_ANYCRLF, PCRE_BSR_UNICODE.
+
+.SS PCRE Parameters
+TYPE - type of filtered data (comma-delimited list):
+.br
+ request - content of the client's request (e.g., HTTP GET request string)
+.br
+ cliheader - content of the client request headers
+.br
+ srvheader - content of the server's reply headers
+.br
+ clidata - data received from the client (e.g., HTTP POST data)
+.br
+ srvdata - data received from the server (e.g., HTML page)
+
+FILTER_ACTION - action on match:
+.br
+ allow - allow this request without checking the rest of the rules
+.br
+ deny - deny this request without checking the rest of the rules
+.br
+ dunno - continue with the rest of the rules (useful with pcre_rewrite)
+
+REGEXP - PCRE (Perl) regular expression. Use * if no regexp matching is required.
+
+REWRITE_EXPRESSION - substitution string. May contain Perl-style substrings
+$1, $2, etc. $0 means the whole matched string. \er and \en may be used
+to insert new lines; the string may be empty ("").
+
+ACE - access control entry (user names, source IPs, destination IPs, ports, etc.),
+identical to allow/deny/bandlimin commands. The regular expression is only
+matched if the ACL matches the connection data.
+Warning: Regular expressions don't require authentication and cannot replace
+authentication and/or allow/deny ACLs.
+
+.SH BUGS
+Report all bugs to
+.BR 3proxy@3proxy.org
+.SH SEE ALSO
+3proxy(8), 3proxy_crypt(8), proxy(8), ftppr(8), socks(8), pop3p(8), imapp(8), smtpp(8), tlspr(8), tcppm(8), udppm(8), syslogd(8),
+.br
+ https://3proxy.org/
+.SH AUTHORS
+3proxy is designed by Vladimir Dubrovin <vlad@3proxy.org>

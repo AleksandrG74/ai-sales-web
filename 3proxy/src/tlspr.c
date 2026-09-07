@@ -1,0 +1,472 @@
+/*
+   3APA3A simplest proxy server
+   (c) 2002-2026 by Vladimir Dubrovin <vlad@3proxy.org>
+
+   please read License Agreement
+
+*/
+
+#include "proxy.h"
+
+#ifndef PORTMAP
+#define PORTMAP
+#endif
+#define RETURN(xxx) { param->res = xxx; goto CLEANRET; }
+
+unsigned size16(unsigned char *buf){
+    unsigned res;
+    res = (((unsigned)buf[0]) << 8) + +buf[1];
+    return res;
+}
+
+#define BSIZE (4096)
+#define SNILEN (256)
+#define PROTOLEN (32)
+
+int srvstarttls(struct clientparam *param, PROXYSERVICE proto){
+ unsigned char buf[1024];
+ int i, found = 0;
+
+ switch(proto){
+ case S_IMAPP:
+	i = sockgetlinebuf(param, SERVER, buf, sizeof(buf) - 1, '\n', conf.timeouts[STRING_L]);
+	if(i < 4) return 1;
+	buf[i] = 0;
+	if(strncasecmp((char *)buf, "* OK", 4)) return 1;
+	found = hascap(buf, "STARTTLS");
+	if(!found){
+	    if(socksend(param, param->remsock, (unsigned char *)"zz CAPABILITY\r\n", 15, conf.timeouts[STRING_S])!=15) return 2;
+	    for(;;){
+		i = sockgetlinebuf(param, SERVER, buf, sizeof(buf) - 1, '\n', conf.timeouts[STRING_L]);
+		if(i < 3) return 2;
+		buf[i] = 0;
+		if(!strncasecmp((char *)buf, "* CAPABILITY", 12) && hascap(buf, "STARTTLS")) found = 1;
+		if(!strncasecmp((char *)buf, "zz ", 3)) break;
+	    }
+	    if(!found) return 3;
+	}
+	if(socksend(param, param->remsock, (unsigned char *)"zz STARTTLS\r\n", 13, conf.timeouts[STRING_S])!=13) return 2;
+	i = sockgetlinebuf(param, SERVER, buf, sizeof(buf) - 1, '\n', conf.timeouts[STRING_L]);
+	if(i < 5) return 2;
+	buf[i] = 0;
+	if(strncasecmp((char *)buf, "zz OK", 5)) return 3;
+	break;
+ case S_POP3P:
+	i = sockgetlinebuf(param, SERVER, buf, sizeof(buf) - 1, '\n', conf.timeouts[STRING_L]);
+	if(i < 3) return 1;
+	buf[i] = 0;
+	if(strncasecmp((char *)buf, "+OK", 3)) return 1;
+	if(socksend(param, param->remsock, (unsigned char *)"CAPA\r\n", 6, conf.timeouts[STRING_S])!=6) return 2;
+	for(;;){
+	    i = sockgetlinebuf(param, SERVER, buf, sizeof(buf) - 1, '\n', conf.timeouts[STRING_L]);
+	    if(i < 1) return 2;
+	    buf[i] = 0;
+	    if(buf[0] == '.') break;
+	    if(!strncasecmp((char *)buf, "-ERR", 4)) return 2;
+	    if(hascap(buf, "STLS")) found = 1;
+	}
+	if(!found) return 3;
+	if(socksend(param, param->remsock, (unsigned char *)"STLS\r\n", 6, conf.timeouts[STRING_S])!=6) return 2;
+	i = sockgetlinebuf(param, SERVER, buf, sizeof(buf) - 1, '\n', conf.timeouts[STRING_L]);
+	if(i < 3) return 2;
+	buf[i] = 0;
+	if(strncasecmp((char *)buf, "+OK", 3)) return 3;
+	break;
+ case S_SMTPP:
+	i = getmultiline(param, SERVER, buf, sizeof(buf) - 1, NULL, NULL);
+	if(i < 3) return 1;
+	buf[i] = 0;
+	if(strncasecmp((char *)buf, "220", 3)) return 1;
+	i = sprintf((char *)buf, "EHLO [");
+	i += myinet_ntop(*SAFAMILY(&param->sinsl), SAADDR(&param->sinsl), (char *)buf+strlen((char *)buf), 64);
+	i += sprintf((char *)buf+strlen((char *)buf), "]\r\n");
+	if(socksend(param, param->remsock, buf, i, conf.timeouts[STRING_S])!= i) return 2;
+	i = getmultiline(param, SERVER, buf, sizeof(buf) - 1, "STARTTLS", &found);
+	if(i < 3) return 2;
+	buf[i] = 0;
+	if(strncasecmp((char *)buf, "250", 3)) return 2;
+	if(!found) return 3;
+	if(socksend(param, param->remsock, (unsigned char *)"STARTTLS\r\n", 10, conf.timeouts[STRING_S])!= 10) return 2;
+	i = sockgetlinebuf(param, SERVER, buf, sizeof(buf) - 1, '\n', conf.timeouts[STRING_L]);
+	if(i < 3) return 2;
+	buf[i] = 0;
+	if(strncasecmp((char *)buf, "220", 3)) return 3;
+	break;
+ default:
+	return 1;
+ }
+ return 0;
+}
+
+uint16_t starttlsport(PROXYSERVICE proto){
+ switch(proto){
+ case S_IMAPP: return 143;
+ case S_POP3P: return 110;
+ case S_SMTPP: return 587;
+ default: return 443;
+ }
+}
+
+int clistarttls(struct clientparam *param, PROXYSERVICE proto){
+ unsigned char buf[1024];
+ unsigned char tag[64];
+ unsigned char *se, *cmd;
+ int i;
+
+ switch(proto){
+ case S_IMAPP:
+	i = sprintf((char *)buf, "* OK [CAPABILITY IMAP4rev1 STARTTLS LOGINDISABLED] IMAP4rev1 Proxy Ready\r\n");
+	if(socksend(param, param->clisock, buf, i, conf.timeouts[STRING_S])!=i) return 1;
+	for(;;){
+		i = sockgetlinebuf(param, CLIENT, buf, sizeof(buf) - 10, '\n', conf.timeouts[STRING_S]);
+		if(i < 4) return 1;
+		buf[i] = 0;
+		if ((se=(unsigned char *)strchr((char *)buf, '\r'))) *se = 0;
+		if (!(se=(unsigned char *)strchr((char *)buf, ' ')) || (se - buf) >= (int)(sizeof(tag) - 1)) return 1;
+		memcpy(tag, buf, se - buf);
+		tag[se - buf] = 0;
+		cmd = se + 1;
+		if(!strncasecmp((char *)cmd, "LOGOUT", 6)){
+			socksend(param, param->clisock, (unsigned char *)"* BYE\r\n", 7, conf.timeouts[STRING_S]);
+			sprintf((char *)buf, "%.60s OK LOGOUT completed\r\n", (char *)tag);
+			socksend(param, param->clisock, buf, (int)strlen((char *)buf), conf.timeouts[STRING_S]);
+			return -1;
+		}
+		if(!strncasecmp((char *)cmd, "CAPABILITY", 10)){
+			i = sprintf((char *)buf, "* CAPABILITY IMAP4rev1 STARTTLS LOGINDISABLED\r\n");
+			socksend(param, param->clisock, buf, i, conf.timeouts[STRING_S]);
+			sprintf((char *)buf, "%.60s OK CAPABILITY completed\r\n", (char *)tag);
+			socksend(param, param->clisock, buf, (int)strlen((char *)buf), conf.timeouts[STRING_S]);
+			continue;
+		}
+		if(!strncasecmp((char *)cmd, "STARTTLS", 8)){
+			sprintf((char *)buf, "%.60s OK Begin TLS negotiation\r\n", (char *)tag);
+			if(socksend(param, param->clisock, buf, (int)strlen((char *)buf), conf.timeouts[STRING_S]) <= 0) return 1;
+			return 0;
+		}
+		sprintf((char *)buf, "%.60s BAD need STARTTLS first\r\n", (char *)tag);
+		socksend(param, param->clisock, buf, (int)strlen((char *)buf), conf.timeouts[STRING_S]);
+	}
+ case S_POP3P:
+	if(socksend(param, param->clisock, (unsigned char *)"+OK Proxy\r\n", 11, conf.timeouts[STRING_S])!=11) return 1;
+	for(;;){
+		i = sockgetlinebuf(param, CLIENT, buf, sizeof(buf) - 10, '\n', conf.timeouts[STRING_S]);
+		if(i < 4) return 1;
+		if(!strncasecmp((char *)buf, "STLS", 4)){
+			if(socksend(param, param->clisock, (unsigned char *)"+OK Begin TLS negotiation\r\n", 27, conf.timeouts[STRING_S])!=27) return 1;
+			return 0;
+		}
+		if(!strncasecmp((char *)buf, "CAPA", 4)){
+			socksend(param, param->clisock, (unsigned char *)"+OK Capability list follows\r\nSTLS\r\n.\r\n", 38, conf.timeouts[STRING_S]);
+			continue;
+		}
+		if(!strncasecmp((char *)buf, "QUIT", 4)){
+			socksend(param, param->clisock, (unsigned char *)"+OK\r\n", 5, conf.timeouts[STRING_S]);
+			return -1;
+		}
+		socksend(param, param->clisock, (unsigned char *)"-ERR need STLS first\r\n", 22, conf.timeouts[STRING_S]);
+	}
+ case S_SMTPP:
+	if(socksend(param, param->clisock, (unsigned char *)"220 Proxy\r\n", 11, conf.timeouts[STRING_S])!=11) return 1;
+	for(;;){
+		i = sockgetlinebuf(param, CLIENT, buf, sizeof(buf) - 10, '\n', conf.timeouts[STRING_S]);
+		if(i < 4) return 1;
+		if(!strncasecmp((char *)buf, "STARTTLS", 8)){
+			if(socksend(param, param->clisock, (unsigned char *)"220 2.0.0 Ready to start TLS\r\n", 30, conf.timeouts[STRING_S])!=30) return 1;
+			return 0;
+		}
+		if(!strncasecmp((char *)buf, "EHLO ", 5)){
+			socksend(param, param->clisock, (unsigned char *)"250-Proxy\r\n250 STARTTLS\r\n", 25, conf.timeouts[STRING_S]);
+			continue;
+		}
+		if(!strncasecmp((char *)buf, "HELO ", 5)){
+			socksend(param, param->clisock, (unsigned char *)"250 Proxy\r\n", 11, conf.timeouts[STRING_S]);
+			continue;
+		}
+		if(!strncasecmp((char *)buf, "QUIT", 4)){
+			socksend(param, param->clisock, (unsigned char *)"221 Proxy\r\n", 11, conf.timeouts[STRING_S]);
+			return -1;
+		}
+		socksend(param, param->clisock, (unsigned char *)"530 5.7.0 Must issue a STARTTLS command first\r\n", 47, conf.timeouts[STRING_S]);
+	}
+ default:
+	break;
+ }
+ return 1;
+}
+
+
+int parsehello(int type, unsigned char *hello, unsigned len, char *sni, int * snipos, int *lv, char * proto){
+    unsigned offset;
+    unsigned hlen, slen, cslen, elen, snllen, snlen, alpnlen;
+    int snifound=0;
+    
+    if(len < 64) return -1;
+    if(hello[5] != type) return -2;
+    if(hello[6] != 0) return -3;
+    hlen = size16(hello+7);
+    if((hlen+9) != len) return -4;
+    offset = 9;
+    if(hello[offset] != 3) return -5;
+    *lv = hello[offset+1];
+    offset += 34;
+    slen = hello[offset];
+    if((offset + slen + 3) > len) return -6;
+    offset += (slen+1);
+    if(type == 1){
+	cslen = size16(hello+offset);
+        if((offset + cslen + 3) > len) return -7;
+	offset += (cslen+2);
+	cslen = hello[offset];
+	if((offset + cslen + 3) > len) return -8;
+	offset += (cslen+1);
+    }
+    else if(type == 2){
+	offset += 3;
+    }
+    elen = size16(hello+offset);
+    offset += 2;
+    if(elen+offset != len) return -9;
+    while(elen > 3){
+	unsigned xlen;
+	xlen = size16(hello+offset+2);
+	if(xlen+4 > elen) return -10;
+	if(type == 1 && xlen >= 5 && hello[offset] == 0 && hello[offset+1] == 0){
+	    snllen=size16(hello+offset+4);
+	    if(snllen>3){
+		if(snllen+2 != xlen) return -12;
+		if(hello[offset+6] != 0) return -13;
+		snlen=size16(hello+offset+7);
+		if(snlen + 3 > snllen) return -14;
+		if(snlen+1 > SNILEN) return -15;
+		memcpy(sni, hello + offset + 9, snlen);
+		*snipos = offset + 9;
+		sni[snlen] = 0;
+		snifound = snlen;
+	    }
+	}
+	else if(hello[offset] == 0 && hello[offset+1] == 43){
+	    if(xlen>2){
+    		*lv = hello[offset+6];
+	    }
+	    else if(xlen==2){
+    		*lv = hello[offset+5];
+	    }
+	}
+	else if(xlen >= 3 && hello[offset] == 0 && hello[offset+1] == 16){
+	    alpnlen=hello[offset+6];
+	    if(alpnlen+7>elen) return -16;
+	    if(alpnlen+1>PROTOLEN) return -17;
+	    memcpy(proto, hello+offset+7, alpnlen);
+	    proto[alpnlen] = 0;
+	}
+	offset += (xlen+4);
+	elen -= (xlen+4);
+    }
+    return snifound;
+}
+
+int tlstobufcli(struct clientparam *param){
+    unsigned long  len, newlen;
+    if(!param->clibuf){
+	if(!(param->clibuf = malloc(SRVBUFSIZE))) return -1;
+        param->clibufsize = SRVBUFSIZE;
+	param->clioffset = param->cliinbuf = 0;
+    }
+    if(param->srvinbuf != param->srvoffset){
+	len = socksend(param, param->clisock, param->srvbuf+param->srvoffset,param->srvinbuf-param->srvoffset, conf.timeouts[STRING_S]);
+	if(len != param->srvinbuf-param->srvoffset){
+	    return -2;
+	}
+	param->srvinbuf = param->srvoffset = 0;
+    }
+    len = sockfillbuffcli(param, 5, conf.timeouts[STRING_S]);
+    if(len < 5) return -2;
+    if(param->clibuf[1] != 3) {
+	return -3;
+    }
+    else {
+	len = 5 + size16(param->clibuf+3);
+        if(len > param->clibufsize) return -4;
+	for(newlen=param->cliinbuf; newlen < len; newlen=param->cliinbuf){
+	    sockfillbuffcli(param, len, conf.timeouts[STRING_S]);
+	    if(param->cliinbuf <= newlen) return -5;
+	}
+    }
+    return (int)len;
+}
+
+int tlstobufsrv(struct clientparam *param){
+    unsigned long len, newlen;
+
+    if(param->cliinbuf != param->clioffset){
+	len = socksend(param, param->remsock, param->clibuf+param->clioffset,param->cliinbuf-param->clioffset, conf.timeouts[STRING_S]);
+	if(len != param->cliinbuf-param->clioffset){
+	    return -1;
+	}
+	param->cliinbuf = param->clioffset = 0;
+    }
+    if(!param->srvbuf){
+        if(!(param->srvbuf = malloc(SRVBUFSIZE))) return -1;
+	param->srvbufsize = SRVBUFSIZE;
+	param->srvoffset = param->srvinbuf = 0;
+    }
+    len = sockfillbuffsrv(param, 5, conf.timeouts[STRING_S]);
+    if(len < 5) return -3;
+    if(param->srvbuf[1] != 3) {
+	return -4;
+    }
+    else {
+	len = 5 + size16(param->srvbuf+3);
+	if(len > param->srvbufsize) return -5;
+	for(newlen=param->srvinbuf; newlen < len; newlen=param->srvinbuf){
+	    sockfillbuffsrv(param, len, conf.timeouts[STRING_S]);
+	    if(param->srvinbuf <= newlen) return -6;
+	}
+    }
+    return (int)len;
+}
+
+void * tlsprchild(struct clientparam* param) {
+ int res;
+ char sni[SNILEN];
+ char req[SNILEN+PROTOLEN+16];
+ int lv=-1;
+ char proto[PROTOLEN]="-";
+ int snipos = 0;
+ PROXYSERVICE stlsproto = param->clientstarttls? param->clientstarttls : param->srv->srvstarttls;
+
+ if(!param->clientstarttls && stlsproto){
+    res = clistarttls(param, stlsproto);
+    if(res > 0) RETURN(364);
+    if(res < 0) RETURN(0);
+ }
+
+ res = tlstobufcli(param);
+ if(res <= 0 || param->clibuf[0] != 22){
+     if(param->srv->requirecert)RETURN(300-res);
+ }
+ else {
+    lv = param->clibuf[2];
+    res = parsehello(1, param->clibuf, (unsigned)res, sni, &snipos, &lv, proto);
+    if(res > 0){
+	if(param->hostname){
+	    free(param->hostname);
+	    param->hostname = NULL;
+	}
+	else if (parsehostname(sni, param, param->srv->targetport? ntohs(param->srv->targetport):starttlsport(stlsproto))) RETURN (100);
+	if (!param->hostname)param->hostname = (unsigned char *)strdup(sni);
+	if(param->srv->s_option && snipos && res > 1){
+	    int len;
+	    
+	    len = socksend(param, param->remsock, param->clibuf+param->clioffset,snipos + (res/2), conf.timeouts[STRING_S]);
+	    if(len != snipos + (res/2)){
+		RETURN(310);
+	    }
+	    param->clioffset += snipos + (res/2);
+
+	}
+    }
+    else if (res < 0 && param->srv->requirecert) RETURN(310-res);
+ }
+ param->operation = CONNECT;
+ param->redirectfunc = NULL;
+ res = (*param->srv->authfunc)(param);
+ if(res) {RETURN(res);}
+ if (param->npredatfilters){
+	int action;
+        action = handlepredatflt(param);
+        if(action == HANDLED){
+                RETURN(0);
+        }
+        if(action != PASS) RETURN(19);
+ }
+ if(param->redirectfunc && param->redirectfunc != tlsprchild){
+    return (void *)param->redirectfunc;
+ }
+
+ if(stlsproto){
+    res = srvstarttls(param, stlsproto);
+    if(res){
+	socksend(param, param->clisock, (unsigned char *)"\x15\x03\x01\x00\x02\x02\x28", 7, conf.timeouts[STRING_S]);
+	RETURN(360+res);
+    }
+ }
+
+ if(param->srv->requirecert > 1){
+    res = tlstobufsrv(param);
+    if(res <= 0 || param->srvbuf[0] != 22) RETURN(340-res);
+    lv = param->srvbuf[2];
+    res = parsehello(2, param->srvbuf, (unsigned)res, sni, &snipos, &lv, proto);
+    if (res < 0) RETURN(350-res);
+ }
+ if(param->srv->requirecert > 2){
+    int srvcert=0, clicert=0, reqcert=0, len, done;
+    if(lv > 3) RETURN(370);
+    for(done=0;!done;) {
+	len = param->srvinbuf;
+	if(socksend(param, param->clisock, param->srvbuf,len, conf.timeouts[STRING_S]) != len) RETURN(371);
+	param->srvinbuf = 0;
+	res = tlstobufsrv(param);
+	if(res <= 0) RETURN(380-res);
+	if(param->srvbuf[0]!= 22) break;
+	switch(param->srvbuf[5]){
+	    case 11:
+		/* process server certificates here */
+		if(param->srvbuf[6]||param->srvbuf[7]||param->srvbuf[8]>64) srvcert = 1;
+		break;
+	    case 13:
+		reqcert = 1;
+		break;
+	    case 14:
+		done = 1;
+		break;
+	    default:
+		break;
+	}
+    }
+    if(!srvcert) RETURN(373);
+    if(param->srv->requirecert > 3){
+	if(!reqcert) RETURN(374);
+    	for(done=0;!done;) {
+	    res = tlstobufcli(param);
+	    if(res <= 0) RETURN(390-res);
+	    len = res;
+	    if(param->clibuf[0]!= 22) break;
+	    switch(param->clibuf[5]){
+		case 11:
+		    /* process client certificates here */
+		    if(param->clibuf[6]||param->clibuf[7]||param->clibuf[8]>64)clicert = 1;
+		    break;
+		case 14:
+		    done = 1;
+		    break;
+		default:
+		    break;
+	    }
+	    if(done) break;
+	    if(socksend(param, param->remsock, param->clibuf,len, conf.timeouts[STRING_S]) != len) RETURN(375);
+	    param->cliinbuf = 0;
+	}
+	if(!clicert) RETURN(375);
+    }
+ }
+
+ RETURN (mapsocket(param, conf.timeouts[CONNECTION_L]));
+CLEANRET:
+ 
+ sprintf(req, "%sv%d.%d %s %s", lv<0?"NONE":lv?"TLS":"SSL", lv<0?0:lv?1:3, lv<0?0:lv?lv-1:0, param->hostname?(char *)param->hostname:"-", proto);
+ dolog(param, (unsigned char *)req);
+ return (NULL);
+}
+
+#ifdef WITHMAIN
+struct proxydef childdef = {
+	tlsprchild,
+	1443,
+	0,
+	S_TLSPR,
+	""
+};
+#include "proxymain.c"
+#endif

@@ -1,0 +1,26 @@
+2026-09-06 01:55:19,287 - __main__ - ERROR - TELEGRAM_BOT_TOKEN not configured!
+2026-09-06 04:08:30,650 - __main__ - INFO - Starting Telegram Bot...
+2026-09-06 04:08:30,650 - __main__ - INFO - Orchestrator URL: http://localhost:8000/api/orchestrator/process_message
+2026-09-06 04:08:30,969 - aiogram.dispatcher - INFO - Start polling
+2026-09-06 04:08:52,032 - aiogram.dispatcher - INFO - Polling stopped
+2026-09-06 04:08:52,303 - __main__ - ERROR - Bot crashed: HTTP Client says - ClientConnectorError: Cannot connect to host api.telegram.org:443 ssl:default [Превышен таймаут семафора]
+2026-09-06 04:11:23,857 - __main__ - INFO - Starting Telegram Bot...
+2026-09-06 04:11:23,858 - __main__ - INFO - Orchestrator URL: http://localhost:8000/api/orchestrator/process_message
+2026-09-06 04:11:24,193 - aiogram.dispatcher - INFO - Start polling
+2026-09-06 04:11:45,244 - aiogram.dispatcher - INFO - Polling stopped
+2026-09-06 04:11:45,514 - __main__ - ERROR - Bot crashed: HTTP Client says - ClientConnectorError: Cannot connect to host api.telegram.org:443 ssl:default [Превышен таймаут семафора]
+2026-09-06 04:13:51,731 - __main__ - INFO - Starting Telegram Bot...
+2026-09-06 04:13:51,732 - __main__ - INFO - Orchestrator URL: http://localhost:8000/api/orchestrator/process_message
+2026-09-06 04:13:52,055 - aiogram.dispatcher - INFO - Start polling
+2026-09-06 04:14:13,144 - aiogram.dispatcher - INFO - Polling stopped
+2026-09-06 04:14:13,401 - __main__ - ERROR - Bot crashed: HTTP Client says - ClientConnectorError: Cannot connect to host api.telegram.org:443 ssl:default [Превышен таймаут семафора]
+2026-09-06 04:21:41,881 - __main__ - INFO - Starting Telegram Bot...
+2026-09-06 04:21:41,882 - __main__ - INFO - Orchestrator URL: http://localhost:8000/api/orchestrator/process_message
+2026-09-06 04:21:42,187 - aiogram.dispatcher - INFO - Start polling
+2026-09-06 04:22:03,263 - aiogram.dispatcher - INFO - Polling stopped
+2026-09-06 04:22:03,522 - __main__ - ERROR - Bot crashed: HTTP Client says - ClientConnectorError: Cannot connect to host api.telegram.org:443 ssl:default [Превышен таймаут семафора]
+2026-09-06 10:44:58,616 - __main__ - INFO - Starting Telegram Bot...
+2026-09-06 10:44:58,624 - __main__ - INFO - Orchestrator URL: http://localhost:8000/api/orchestrator/process_message
+2026-09-06 10:44:58,686 - aiogram.dispatcher - INFO - Start polling
+2026-09-06 10:45:19,763 - aiogram.dispatcher - INFO - Polling stopped
+2026-09-06 10:45:20,028 - __main__ - ERROR - Bot crashed: HTTP Client says - ClientConnectorError: Cannot connect to host api.telegram.org:443 ssl:default [Превышен таймаут семафора]

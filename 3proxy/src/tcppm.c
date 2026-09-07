@@ -1,0 +1,62 @@
+/*
+   3APA3A simplest proxy server
+   (c) 2002-2026 by Vladimir Dubrovin <vlad@3proxy.org>
+
+   please read License Agreement
+
+*/
+
+#include "proxy.h"
+
+#ifndef PORTMAP
+#define PORTMAP
+#endif
+#define RETURN(xxx) { param->res = xxx; goto CLEANRET; }
+
+void * tcppmchild(struct clientparam* param) {
+ int res;
+
+ if(!param->hostname){ 
+#ifdef WITH_UN
+    if(!strncmp((char *)param->srv->target, "unix:", 5)){
+	make_un(param->srv->target + 5, (struct sockaddr_un *)&param->sinsr);
+	make_un(param->srv->target + 5, (struct sockaddr_un *)&param->req);
+	param->hostname = (unsigned char *)strdup((char *)param->srv->target);
+    } else
+#endif
+    if(
+	parsehostname((char *)param->srv->target, param, ntohs(param->srv->targetport))
+    ) RETURN(100);
+ }
+ param->operation = CONNECT;
+ res = (*param->srv->authfunc)(param);
+ if(res) {RETURN(res);}
+ if (param->npredatfilters){
+	int action;
+        action = handlepredatflt(param);
+        if(action == HANDLED){
+                RETURN(0);
+        }
+        if(action != PASS) RETURN(19);
+ }
+ if(param->redirectfunc){
+    return (void *)param->redirectfunc;
+ }
+
+ RETURN (mapsocket(param, conf.timeouts[CONNECTION_L]));
+CLEANRET:
+ 
+ dolog(param, param->hostname);
+ return (NULL);
+}
+
+#ifdef WITHMAIN
+struct proxydef childdef = {
+	tcppmchild,
+	0,
+	0,
+	S_TCPPM,
+	""
+};
+#include "proxymain.c"
+#endif

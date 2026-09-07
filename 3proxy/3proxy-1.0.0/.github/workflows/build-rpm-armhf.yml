@@ -1,0 +1,119 @@
+name: DEB build armhf
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    name: "${{ matrix.target }}"
+    strategy:
+      matrix:
+        target:
+          - ubuntu-latest
+    runs-on: ${{ matrix.target }}
+    steps:
+    - uses: actions/checkout@v7
+    - name: env
+      run: |
+       pwd
+       echo "RELEASE=$(cat RELEASE)" >> $GITHUB_ENV
+       BUILDDATE=$(sed -n 's/^#define BUILDDATE "\(.*\)"$/\1/p' src/version.h)
+       [ -n "$BUILDDATE" ] || BUILDDATE=$(date -u +%y%m%d%H%M%S)
+       echo "VERSION=$BUILDDATE" >> $GITHUB_ENV
+       SOURCE_DATE_EPOCH=$(date -u -d "20${BUILDDATE:0:2}-${BUILDDATE:2:2}-${BUILDDATE:4:2} ${BUILDDATE:6:2}:${BUILDDATE:8:2}:${BUILDDATE:10:2}" +%s)
+       echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH" >> $GITHUB_ENV
+    - name: configure deb env
+      run: |
+       mkdir ~/debian
+       mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+       tar -czf ~/rpmbuild/SOURCES/3proxy-$RELEASE.tar.gz --transform "s,^,3proxy-$RELEASE/," .
+       ln -s ~/rpmbuild/SOURCES/3proxy-$RELEASE.tar.gz ~/rpmbuild/SOURCES/$RELEASE.tar.gz
+       cp scripts/rh/3proxy.spec ~/rpmbuild/SPECS/3proxy-$RELEASE.spec
+       cp ~/rpmbuild/SOURCES/3proxy-$RELEASE.tar.gz ~/debian/3proxy_$RELEASE.orig.tar.gz
+    - name: debbuild
+      run: |
+        docker run --rm \
+          -v "$HOME/debian:/debian" \
+          -e RELEASE="$RELEASE" -e VERSION="$VERSION" \
+          -e SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+          ubuntu:22.04 bash -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            dpkg --add-architecture armhf
+            sed -i "s|^deb |deb [arch=amd64] |" /etc/apt/sources.list
+            { echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse"
+              echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse"
+            } >> /etc/apt/sources.list
+            apt-get update
+            apt-get install -y crossbuild-essential-armhf build-essential debhelper fakeroot \
+                               libssl-dev:armhf libpcre2-dev:armhf libpam0g-dev:armhf
+            cd /debian
+            tar xzf 3proxy_$RELEASE.orig.tar.gz
+            cd 3proxy-$RELEASE
+            { echo "3proxy ($RELEASE-$VERSION) buster; urgency=medium"
+              echo " "
+              echo "  *3proxy $RELEASE build"
+              echo " "
+              echo " -- z3APA3A <3apa3a@3proxy.org>  $(date -R -u -d @$SOURCE_DATE_EPOCH)"
+              echo ""
+            } > debian/changelog
+            export PATH=/usr/arm-linux-gnueabihf/bin:$PATH
+            export CC=arm-linux-gnueabihf-gcc
+            export LD_LIBRARY_PATH=/usr/arm-linux-gnueabihf/lib:$LD_LIBRARY_PATH
+            dpkg-buildpackage'
+        cp ~/debian/3proxy_$RELEASE-"$VERSION"_armhf.deb ./3proxy-$RELEASE.arm.deb
+    - name: Get artifact deb
+      uses: actions/upload-artifact@v7
+      with:
+       name: "3proxy-${{ env.RELEASE }}-arm.deb"
+       path: "*.deb"
+    - name: Import signing key
+      if: github.event_name == 'release'
+      env:
+       GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+       GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      run: |
+       if [ -z "$GPG_PRIVATE_KEY" ]; then echo "GPG_PRIVATE_KEY is not set"; exit 1; fi
+       mkdir -p ~/.gnupg && chmod 700 ~/.gnupg
+       printf 'allow-loopback-pinentry\ndefault-cache-ttl 7200\nmax-cache-ttl 7200\n' > ~/.gnupg/gpg-agent.conf
+       gpgconf --kill gpg-agent || true
+       printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+       KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')
+       echo "GPG_KEYID=$KEYID" >> $GITHUB_ENV
+       echo prime > /tmp/prime.txt
+       gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+           -u "$KEYID" --detach-sign -o /dev/null /tmp/prime.txt
+       rm -f /tmp/prime.txt
+    - name: Checksums and detached signatures
+      if: github.event_name == 'release'
+      env:
+       GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      run: |
+       sha256sum *.deb > SHA256SUMS-arm
+       for f in *.deb SHA256SUMS-arm; do
+         gpg --batch --yes --pinentry-mode loopback --passphrase "$GPG_PASSPHRASE" \
+             -u "$GPG_KEYID" --armor --detach-sign "$f"
+       done
+       sha256sum -c SHA256SUMS-arm
+       gpg --verify SHA256SUMS-arm.asc SHA256SUMS-arm
+    - name: Attest build provenance
+      if: github.event_name == 'release'
+      uses: actions/attest-build-provenance@v2
+      with:
+        subject-path: |
+          *.deb
+    - name: Upload to release
+      if: github.event_name == 'release'
+      env:
+       GH_TOKEN: ${{ github.token }}
+       TAG: ${{ github.event.release.tag_name }}
+      run: gh release upload "$TAG" *.deb *.deb.asc SHA256SUMS-arm SHA256SUMS-arm.asc

@@ -1,0 +1,26 @@
+!! Fix: use-after-free on the ftp:// request path in HTTP proxy, a request buffer reallocation left a stale pointer; heap corruption, requires authenticated access
+!! Fix: buffer overflow in radsend() with an oversized request hostname; RADIUS is experimental, log radius or auth radius with fakeresolve is required to reach it
+!! Fix: buffer overflow in smtpp when relaying AUTH LOGIN credentials to a server which offers AUTH PLAIN only; requires authorised access to smtpp
+!! Fix: out-of-bounds read in tlspr on a malformed TLS ClientHello
+!! Fix: LDAP injection and unsafe counter file names in LdapPlugin; the plugin is unsupported and is not built with 3proxy
+!! Fix: password and hash comparison in strong authentication is constant-time now
+!! Fix: bounds validation and match/depth limits in pcre filters
++ imapp: IMAPv4 proxy added, supports LOGIN command, AUTH PLAIN and AUTH LOGIN
++ STARTTLS support for smtpp, pop3p, imapp and tlspr, on both client and server side; -x option to disable
++ wolfSSL is supported as an alternative TLS backend, WOLFSSL_CHECK=true selects it (wolfSSL must be built with --enable-opensslextra)
++ Chunked Transfer-Encoding from client is supported by HTTP proxy
++ dnspr: -F option added, fake resolve to redirect traffic
++ ucrt64 build support; static libraries support in Makefile.win
++ minimal and busybox Docker images switched to musl + wolfSSL
+- splice() support is not built by default anymore, it is slower than the read/write path for most traffic; add -DWITHSPLICE to build it
+! Fix: hashtable item was added with wrong index on table grow; with large username/password tables it could cause a single record to be missing
+! Fix: race conditions; stack overflow on FreeBSD
+! Fix: generated certificates are X.509 v3 with basicConstraints CA:FALSE and extendedKeyUsage serverAuth, required by Apple TLS stack and by Chrome on macOS/iOS
+! Fix: dnspr was broken since udppm rewrite
+! Fix: short cleartext passwords failed authentication
+! Fix: parent negotiation after sending PROXY protocol header
+! Fix: maxchild dropped to 100 on config reload if not set explicitly
+! Fix: getrandom() is not used with glibc below 2.25
+! Fix: IPV6_BOUND_IF definition for legacy MacOS
+! Fix: cmake build, arm64 Docker build, Makefile.win with UCRT
+! Multiple minor bugfixes and code cleanup

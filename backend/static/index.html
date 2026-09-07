@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Sales Agent</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <div class="logo">🤖 AI Sales Agent</div>
+        <div class="status-bar">
+            <span id="system-status">Система: <span class="online">● Онлайн</span></span>
+            <span id="time"></span>
+        </div>
+    </header>
+    <main>
+        <nav>
+            <ul>
+                <li data-tab="dashboard" class="active">📊 Дашборд</li>
+                <li data-tab="product">📦 Товар</li>
+                <li data-tab="intents">🎯 Интенты</li>
+                <li data-tab="goals">🏆 Цели</li>
+                <li data-tab="sources">📡 Источники</li>
+                <li data-tab="settings">⚙️ Настройки</li>
+                <li data-tab="leads">👥 Клиенты</li>
+                <li data-tab="modules">🔧 Модули</li>
+                <li data-tab="logs">📋 Логи</li>
+            </ul>
+        </nav>
+        <section id="content">
+            <!-- ДАШБОРД -->
+            <div id="tab-dashboard" class="tab active">
+                <h2>📊 Панель управления</h2>
+                <div class="stats-grid">
+                    <div class="stat-card"><div class="stat-value" id="total-leads">0</div><div class="stat-label">Всего клиентов</div></div>
+                    <div class="stat-card"><div class="stat-value" id="converted-leads">0</div><div class="stat-label">Конвертировано</div></div>
+                    <div class="stat-card"><div class="stat-value" id="conversion-rate">0%</div><div class="stat-label">Конверсия</div></div>
+                    <div class="stat-card"><div class="stat-value" id="active-dialogs">0</div><div class="stat-label">Активные диалоги</div></div>
+                </div>
+                <div class="funnel">
+                    <h3>📈 Воронка продаж</h3>
+                    <div class="funnel-stage" style="width:100%">Контакт <span id="stage-new">0</span></div>
+                    <div class="funnel-stage" style="width:70%">Квалификация <span id="stage-contacted">0</span></div>
+                    <div class="funnel-stage" style="width:50%">Презентация <span id="stage-in_progress">0</span></div>
+                    <div class="funnel-stage" style="width:30%">Закрытие <span id="stage-closing">0</span></div>
+                    <div class="funnel-stage" style="width:15%">🎯 Покупка <span id="stage-converted">0</span></div>
+                </div>
+            </div>
+
+            <!-- ТОВАР -->
+            <div id="tab-product" class="tab">
+                <h2>📦 Настройка товара</h2>
+                <form id="product-form">
+                    <div class="form-group"><label>Название</label><input type="text" id="product-name" required></div>
+                    <div class="form-group"><label>Категория</label><input type="text" id="product-category" required></div>
+                    <div class="form-group"><label>Атрибуты (через запятую)</label><input type="text" id="product-attributes"></div>
+                    <div class="form-group"><label>Ключевые слова (через запятую)</label><input type="text" id="product-keywords"></div>
+                    <div class="form-group"><label>Индустрии (через запятую)</label><input type="text" id="product-industries"></div>
+                    <div class="form-group"><label>Регионы (через запятую)</label><input type="text" id="product-regions"></div>
+                    <button type="submit" class="btn-primary">Сохранить</button>
+                </form>
+            </div>
+
+            <!-- ИНТЕНТЫ -->
+            <div id="tab-intents" class="tab">
+                <h2>🎯 Настройка интентов</h2>
+                <form id="intents-form">
+                    <div class="form-group"><label>Покупка</label><input type="text" id="intent-buying"></div>
+                    <div class="form-group"><label>Проблема</label><input type="text" id="intent-problem"></div>
+                    <div class="form-group"><label>Поиск</label><input type="text" id="intent-seeking"></div>
+                    <div class="form-group"><label>Срочность</label><input type="text" id="intent-urgency"></div>
+                    <button type="submit" class="btn-primary">Сохранить</button>
+                </form>
+            </div>
+
+            <!-- ЦЕЛИ -->
+            <div id="tab-goals" class="tab">
+                <h2>🏆 Настройка целей диалога</h2>
+                <p class="hint">Определите, к какому действию вы ведете клиента</p>
+                <div class="add-goal">
+                    <h3>➕ Добавить новую цель</h3>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Название цели</label>
+                            <input type="text" id="goal-name" placeholder="Например: Переход в каталог">
+                        </div>
+                        <div class="form-group">
+                            <label>Тип триггера</label>
+                            <select id="goal-trigger-type">
+                                <option value="link">Ссылка</option>
+                                <option value="keyword">Ключевая фраза</option>
+                                <option value="action">Действие</option>
+                                <option value="button">Кнопка</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Значение триггера</label>
+                            <input type="text" id="goal-trigger-value" placeholder="Ссылка или ключевая фраза">
+                        </div>
+                        <div class="form-group">
+                            <label>Приоритет (1-10)</label>
+                            <input type="number" id="goal-priority" value="1" min="1" max="10">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Ключевые фразы успеха (через запятую)</label>
+                        <input type="text" id="goal-indicators" placeholder="купил, заказал, перешел, записался">
+                    </div>
+                    <div class="form-group">
+                        <label>Описание</label>
+                        <input type="text" id="goal-description" placeholder="Краткое описание цели">
+                    </div>
+                    <button id="add-goal-btn" class="btn-primary">➕ Добавить цель</button>
+                </div>
+                <h3 style="margin-top: 30px;">📋 Список целей</h3>
+                <div id="goals-list"><p>Загрузка...</p></div>
+            </div>
+
+            <!-- ИСТОЧНИКИ -->
+            <div id="tab-sources" class="tab">
+                <h2>📡 Источники (чаты для мониторинга)</h2>
+                <div class="add-source">
+                    <select id="source-platform">
+                        <option value="telegram">Telegram</option>
+                        <option value="reddit">Reddit</option>
+                        <option value="vk">VK</option>
+                    </select>
+                    <input type="text" id="source-name" placeholder="Название чата/канала (например, @sales_chat)">
+                    <button id="add-source-btn" class="btn-primary">➕ Добавить</button>
+                </div>
+                <div id="sources-list"><p>Загрузка...</p></div>
+            </div>
+
+            <!-- НАСТРОЙКИ -->
+            <div id="tab-settings" class="tab">
+                <h2>⚙️ Настройки</h2>
+                
+                <!-- ОБЩИЕ НАСТРОЙКИ -->
+                <div class="settings-section">
+                    <h3>📨 Режим отправки</h3>
+                    <div class="toggle-row">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="proactive-enabled">
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span id="proactive-status-label">Отправка активных сообщений ВКЛЮЧЕНА</span>
+                    </div>
+                    <p class="hint">Когда включено — бот сам пишет клиентам с высоким Intent Score</p>
+                </div>
+
+                <div class="settings-section">
+                    <h3>🎯 Порог готовности (Intent Score)</h3>
+                    <div class="range-row">
+                        <input type="range" id="min-score" min="0" max="100" value="40">
+                        <span id="min-score-value">40%</span>
+                    </div>
+                    <p class="hint">Клиенты с Intent Score выше этого порога получат сообщение от бота</p>
+                </div>
+
+                <div class="settings-section">
+                    <h3>📝 Шаблон приветствия</h3>
+                    <select id="greeting-template-select" style="width: 100%; max-width: 500px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 10px;">
+                        <option value="default">Рекомендуемое: Здравствуйте! Я заметил, что вы интересуетесь {product}. Чем могу помочь?</option>
+                        <option value="variant1">Вариант 1: Добрый день! 👋 Вижу, вы ищете {product}. Давайте подберем лучший вариант?</option>
+                        <option value="variant2">Вариант 2: Привет! Я заметил ваш интерес к {product}. Расскажу все подробно!</option>
+                        <option value="custom">Свой вариант</option>
+                    </select>
+                    <textarea id="greeting-template" rows="3" style="width: 100%; max-width: 500px; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-family: inherit;">Здравствуйте! Я заметил, что вы интересуетесь {product}. Чем могу помочь?</textarea>
+                    <p class="hint">Используйте {product} — вставится название вашего товара</p>
+                </div>
+
+                <div class="settings-section">
+                    <h3>🚫 Черный список</h3>
+                    <div class="blacklist-row">
+                        <input type="text" id="blacklist-input" placeholder="ID пользователя (например, 123456789)">
+                        <button id="blacklist-add-btn" class="btn-secondary">➕ Добавить</button>
+                    </div>
+                    <div id="blacklist-list"><p>Нет пользователей в черном списке</p></div>
+                </div>
+
+                <button id="settings-save-btn" class="btn-primary" style="margin-top: 20px;">💾 Сохранить общие настройки</button>
+
+                <hr style="margin: 30px 0; border: 1px solid #eee;">
+
+                <!-- НАСТРОЙКИ ДЛЯ КЛИЕНТА -->
+                <h3>🧠 Настройки ИИ для клиента</h3>
+                <p class="hint">Выберите клиента и настройте для него стратегию общения</p>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Выберите клиента</label>
+                        <select id="ai-client-select" style="width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px;">
+                            <option value="">-- Выберите клиента --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>&nbsp;</label>
+                        <button id="ai-client-load-btn" class="btn-secondary">📂 Загрузить настройки</button>
+                    </div>
+                </div>
+
+                <div id="ai-client-settings" style="display: none;">
+                    <!-- ПРОФИЛЬ КЛИЕНТА -->
+                    <div class="settings-section">
+                        <h4>📊 Профиль клиента</h4>
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; text-align: center;">
+                            <div style="background: #f0f2f5; padding: 8px; border-radius: 6px;">
+                                <div style="font-weight: 600; color: #1a1a2e;">Визуал</div>
+                                <div id="ai-visual" style="color: #4ade80;">0%</div>
+                            </div>
+                            <div style="background: #f0f2f5; padding: 8px; border-radius: 6px;">
+                                <div style="font-weight: 600; color: #1a1a2e;">Аудиал</div>
+                                <div id="ai-audial" style="color: #60a5fa;">0%</div>
+                            </div>
+                            <div style="background: #f0f2f5; padding: 8px; border-radius: 6px;">
+                                <div style="font-weight: 600; color: #1a1a2e;">Логик</div>
+                                <div id="ai-logical" style="color: #fbbf24;">0%</div>
+                            </div>
+                            <div style="background: #f0f2f5; padding: 8px; border-radius: 6px;">
+                                <div style="font-weight: 600; color: #1a1a2e;">Кинестетик</div>
+                                <div id="ai-kinesthetic" style="color: #fb923c;">0%</div>
+                            </div>
+                        </div>
+                        <div style="margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                            <div><strong>Интент:</strong> <span id="ai-intent">-</span></div>
+                            <div><strong>Регион:</strong> <span id="ai-region">-</span></div>
+                            <div><strong>Товар:</strong> <span id="ai-product">-</span></div>
+                            <div><strong>Статус:</strong> <span id="ai-status">-</span></div>
+                        </div>
+                    </div>
+
+                    <!-- ПОСЛЕДНЕЕ СООБЩЕНИЕ -->
+                    <div class="settings-section">
+                        <h4>📝 Последнее сообщение клиента</h4>
+                        <div style="background: #f8f9fa; padding: 12px 15px; border-radius: 8px; border-left: 4px solid #60a5fa;">
+                            <div style="color: #888; font-size: 12px;" id="ai-message-time"></div>
+                            <div style="margin-top: 5px; color: #1a1a2e;" id="ai-last-message">Нет сообщений</div>
+                        </div>
+                    </div>
+
+                    <!-- РЕЖИМ ОБЩЕНИЯ -->
+                    <div class="settings-section">
+                        <h4>🎯 Режим общения</h4>
+                        <div style="display: flex; gap: 20px; margin-top: 10px;">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="radio" name="communication-mode" value="wait" checked>
+                                Ждать обращения клиента
+                                <span style="color: #888; font-size: 12px;">(бот не пишет первым)</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="radio" name="communication-mode" value="start">
+                                Начать диалог самому
+                                <span style="color: #888; font-size: 12px;">(бот отправит сообщение)</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- РОЛЬ И СТРАТЕГИЯ -->
+                    <div class="settings-section">
+                        <h4>🎭 Роль продавца</h4>
+                        <select id="ai-role" style="width: 100%; max-width: 300px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px;">
+                            <option value="Консультант">Консультант</option>
+                            <option value="Эксперт">Эксперт</option>
+                            <option value="Друг">Друг</option>
+                            <option value="Лидер мнения">Лидер мнения</option>
+                            <option value="Свой вариант">Свой вариант</option>
+                        </select>
+                        <div id="custom-role-group" style="display: none; margin-top: 8px;">
+                            <input type="text" id="ai-custom-role" placeholder="Свой вариант роли" style="width: 100%; max-width: 300px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px;">
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h4>📋 Стратегия продаж</h4>
+                        <select id="ai-strategy" style="width: 100%; max-width: 300px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px;">
+                            <option value="classic">Классическая (5 шагов)</option>
+                            <option value="problem_solution">От проблемы к решению (4 шага)</option>
+                            <option value="emotional">Эмоциональная (6 шагов)</option>
+                            <option value="rational">Рациональная (4 шага)</option>
+                            <option value="custom">Свой вариант</option>
+                        </select>
+                        <div style="margin-top: 10px; font-size: 13px; color: #666;">
+                            <span id="ai-strategy-description">Приветствие → Потребности → Презентация → Возражения → Закрытие</span>
+                        </div>
+                    </div>
+
+                    <!-- ЭТАПЫ -->
+                    <div class="settings-section">
+                        <h4>📋 Этапы воронки</h4>
+                        <p class="hint">Настройте инструкции для каждого этапа</p>
+                        <div id="stages-container"></div>
+                        <button id="add-stage-btn" class="btn-secondary" style="margin-top: 10px;">➕ Добавить этап</button>
+                    </div>
+
+                    <!-- ПАРАМЕТРЫ -->
+                    <div class="settings-section">
+                        <h4>📏 Параметры сообщений</h4>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Максимальная длина сообщения (символов)</label>
+                                <input type="number" id="ai-max-chars" value="500" min="50" max="2000" style="width: 150px; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px;">
+                            </div>
+                            <div class="form-group">
+                                <label>🌡️ Температура (креативность)</label>
+                                <div style="display: flex; align-items: center; gap: 15px;">
+                                    <input type="range" id="ai-temperature" min="0" max="1" step="0.1" value="0.7" style="width: 200px;">
+                                    <span id="ai-temperature-value" style="font-weight: 600; min-width: 30px;">0.7</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button id="ai-client-save-btn" class="btn-primary">💾 Сохранить настройки для клиента</button>
+                </div>
+            </div>
+
+            <!-- КЛИЕНТЫ -->
+            <div id="tab-leads" class="tab">
+                <h2>👥 Клиенты</h2>
+                <div class="filters">
+                    <select id="lead-filter-status">
+                        <option value="">Все</option>
+                        <option value="new">Новые</option>
+                        <option value="contacted">В контакте</option>
+                        <option value="in_progress">В работе</option>
+                        <option value="converted">Конвертированы</option>
+                        <option value="lost">Потеряны</option>
+                    </select>
+                    <input type="number" id="lead-filter-score" placeholder="Мин. Intent Score" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px;">
+                    <button id="lead-filter-btn" class="btn-secondary">Применить</button>
+                </div>
+                <div id="leads-table-container"><p>Загрузка...</p></div>
+            </div>
+
+            <!-- МОДУЛИ -->
+            <div id="tab-modules" class="tab">
+                <h2>🔧 Модули</h2>
+                <div id="modules-container"><p>Загрузка...</p></div>
+            </div>
+
+            <!-- ЛОГИ -->
+            <div id="tab-logs" class="tab">
+                <h2>📋 Логи</h2>
+                <div class="log-controls">
+                    <select id="log-module" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px;">
+                        <option value="orchestrator">Оркестратор</option>
+                        <option value="client_search">Поиск</option>
+                        <option value="telegram_bot">Telegram</option>
+                        <option value="self_learning">Самообучение</option>
+                    </select>
+                    <button id="log-refresh-btn" class="btn-secondary">Обновить</button>
+                </div>
+                <pre id="log-content" style="background: #1a1a2e; color: #4ade80; padding: 15px; border-radius: 10px; font-family: 'Courier New', monospace; font-size: 13px; max-height: 500px; overflow-y: auto; white-space: pre-wrap; word-break: break-word;">Загрузка...</pre>
+            </div>
+        </section>
+    </main>
+    <script src="/static/script.js"></script>
+</body>
+</html>
