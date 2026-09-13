@@ -13,6 +13,23 @@ from database import init_db
 init_db()
 
 app = FastAPI(title="AI Sales Agent", version="1.0.0")
+import secrets
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+
+security = HTTPBasic()
+
+def check_auth(credentials: HTTPBasicCredentials = Depends(security)):
+    correct_username = secrets.compare_digest(credentials.username, os.getenv("DASHBOARD_USER", "admin"))
+    correct_password = secrets.compare_digest(credentials.password, os.getenv("DASHBOARD_PASS", "changeme"))
+    if not (correct_username and correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
 
 # Подключаем все роутеры
 app.include_router(leads.router)
@@ -30,7 +47,7 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-@app.get("/")
+@app.get("/", dependencies=[Depends(check_auth)])
 async def root():
     index_path = os.path.join(static_dir, "index.html")
     if os.path.exists(index_path):
