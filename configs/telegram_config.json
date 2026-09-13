@@ -1,24 +1,46 @@
 {
-    "api_id": 35611241,
-    "api_hash": "dd41c4667ac94a6d7b62b6f4b922ba84",
-    "phone": "+79195260274",
-    "channels": [
-        "t.me/ru2ch",
-        "t.me/overhear"
-    ],
-    "keywords": [
-        "холодильник",
-        "морозильник",
-        "техника",
-        "купить",
-        "нужен"
-    ],
-    "product": "холодильник",
-    "intent_threshold": 40,
-    "scan_limit": 20,
-    "proxy": {
-        "type": "socks5",
-        "addr": "127.0.0.1",
-        "port": 1080
-    }
+  "api_id": 35611241,
+  "api_hash": "dd41c4667ac94a6d7b62b6f4b922ba84",
+  "phone": "+79195260274",
+  "channels": [
+    "byebyedpi_group",
+    "strbypass",
+    "K_3_D",
+    "routerich",
+    "rztkd_chat",
+    "webprogrammists",
+    "inter_thread",
+    "freelead",
+    "neBlackGroup2",
+    "BiznesKontakti",
+    "onlain_biznes_rabota",
+    "biznes_klient_rabota",
+    "mplace_chats_help",
+    "psyhelpon",
+    "PsiologWeHelp",
+    "mirlru",
+    "psikhiatria",
+    "fotomarkettmp",
+    "onemarketservices",
+    "desgangchat",
+    "figmachat",
+    "blender_ru",
+    "fleamarket3d",
+    "zhfut",
+    "newsbarcachat",
+    "MainCardChat",
+    "rgchatik",
+    "chat_proefootball",
+    "okkosportchat",
+    "chat_konditer",
+    "konditer_chat",
+    "gsd_recept",
+    "chat_konditerov_ru",
+    "biblioteka_konditera",
+    "UrozhaiUlov"
+  ],
+  "keywords": ["купить", "нужен", "ищу", "цена"],
+  "product": "услуга",
+  "intent_threshold": 40,
+  "scan_limit": 50
 }
