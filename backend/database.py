@@ -112,7 +112,7 @@ def init_db(db_path=None):
     global engine, SessionLocal
     
     if db_path is None:
-        db_path = "backend/data/database.db"
+        db_path = "/app/backend/data/database.db"
     
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     
