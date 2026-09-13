@@ -1,0 +1,45 @@
+# Секреты
+.env
+.env.tmp
+
+# Виртуальные окружения
+venv/
+env/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Данные
+logs/
+data/
+backend/data/
+sessions/
+*.session
+*.session-journal
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Мусор
+*.zip
+3proxy*
+bin64/
+cfg/
+doc/
+images/
+rus.3ps
+copying
+authors
+icon.ico
+docker-compose.yml.old
+.DS_Store
+Thumbs.db
+
+# Старые версии
+*_v1_old.py
+*_old.py

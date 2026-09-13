@@ -150,32 +150,43 @@ async def create_lead(req: LeadCreateRequest, db: Session = Depends(get_db)):
 
 @router.post("/search")
 async def search_clients(request: dict, db: Session = Depends(get_db)):
-    """Поиск клиентов через веб-интерфейс"""
-    from client_search.generator import ClientGenerator
-    
-    username = request.get('username', '+79195260274')
-    product = request.get('product', 'холодильник')
-    channels = request.get('channels', ['t.me/ru2ch', 't.me/overhear'])
-    
-    # Используем генератор для создания тестовых данных
-    generator = ClientGenerator()
-    generator.product = product
-    generator.count = 5
-    generator.run()
-    
-    # Возвращаем последних найденных клиентов
-    leads = db.query(LeadDB).order_by(LeadDB.created_at.desc()).limit(10).all()
-    
-    return {
-        "leads": [
-            {
-                "user_id": l.user_id,
-                "username": l.username,
-                "message": l.message[:200],
-                "source": l.source,
-                "intent_score": l.intent_score,
-                "status": l.status
-            }
-            for l in leads
-        ]
-    }
+    """Поиск клиентов через subprocess client_search/main.py."""
+    import subprocess
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    script = os.path.join(project_root, "client_search", "main.py")
+    mode = request.get("mode", "search")
+
+    if not os.path.exists(script):
+        raise HTTPException(status_code=500, detail=f"client_search/main.py не найден: {script}")
+
+    cmd = [sys.executable, script, "--once", "--mode", mode]
+    logger.info(f"🚀 Запуск client_search: {' '.join(cmd)}")
+
+    try:
+        result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True, timeout=600)
+
+        if result.returncode != 0:
+            logger.error(f"stderr: {result.stderr[-500:]}")
+
+        leads = db.query(LeadDB).order_by(LeadDB.created_at.desc()).limit(20).all()
+
+        return {
+            "status": "ok",
+            "message": f"Поиск завершён (mode={mode})",
+            "leads": [
+                {
+                    "user_id": l.user_id,
+                    "username": l.username,
+                    "message": (l.message or "")[:200],
+                    "source": l.source,
+                    "intent_score": l.intent_score,
+                    "status": l.status,
+                }
+                for l in leads
+            ],
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="client_search превысил лимит (10 мин)")
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

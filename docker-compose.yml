@@ -1,216 +1,95 @@
-version: '3.8'
+version: "3.9"
 
 services:
-  orchestrator:
-    build: ./services/orchestrator
-    container_name: orchestrator
-    restart: always
+  # ─── Backend (дирижёр, веб-API, статика) ──────────────────
+  backend:
+    build: .
+    container_name: aisales_backend
+    restart: unless-stopped
     ports:
       - "8000:8000"
-    environment:
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - DATABASE_URL=${DATABASE_URL}
+    env_file:
+      - .env
     volumes:
       - ./logs:/app/logs
-      - ./data:/app/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - ./backend/data:/app/backend/data
+      - ./sessions:/app/sessions
+      - ./configs:/app/configs:ro
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 512M
+          cpus: "1.0"
+          memory: 1024M
         reservations:
-          cpus: '0.25'
+          cpus: "0.25"
           memory: 256M
-
-  telegram-bot:
-    build: ./services/telegram-bot
-    container_name: telegram-bot
-    restart: always
-    environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL}
-    volumes:
-      - ./logs:/app/logs
-    depends_on:
-      orchestrator:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://orchestrator:8000/health')"]
-      interval: 30s
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 60s
       timeout: 10s
       retries: 3
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # ─── client-search (работает по расписанию) ──────────────
   client-search:
-    build: ./services/client-search
-    container_name: client-search
-    restart: always
-    environment:
-      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
-      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
-      - TELEGRAM_PHONE=${TELEGRAM_PHONE}
-      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL}
+    build: .
+    container_name: aisales_client_search
+    restart: unless-stopped
+    command: ["python", "client_search/main.py", "--loop", "--mode", "all"]
+    env_file:
+      - .env
     volumes:
       - ./logs:/app/logs
-      - ./data:/app/data
+      - ./backend/data:/app/backend/data
+      - ./sessions:/app/sessions
+      - ./configs:/app/configs:ro
     depends_on:
-      orchestrator:
+      backend:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 512M
+          cpus: "0.8"
+          memory: 768M
         reservations:
-          cpus: '0.25'
+          cpus: "0.25"
           memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  web-ui-backend:
-    build: ./services/web-ui-backend
-    container_name: web-ui-backend
-    restart: always
-    ports:
-      - "3000:3000"
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
+  # ─── telegram-bot ─────────────────────────────────────────
+  telegram-bot:
+    build: .
+    container_name: aisales_telegram_bot
+    restart: unless-stopped
+    command: ["python", "telegram_bot/main.py"]
+    env_file:
+      - .env
     volumes:
       - ./logs:/app/logs
-      - ./data:/app/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-
-  web-ui-frontend:
-    build: ./services/web-ui-frontend
-    container_name: web-ui-frontend
-    restart: always
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./backend/data:/app/backend/data
     depends_on:
-      web-ui-backend:
+      backend:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-
-  classifier:
-    build: ./services/classifier
-    container_name: classifier
-    restart: always
-    environment:
-      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL}
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-    depends_on:
-      orchestrator:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-
-  prompt-generator:
-    build: ./services/prompt-generator
-    container_name: prompt-generator
-    restart: always
-    environment:
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL}
-    volumes:
-      - ./logs:/app/logs
-    depends_on:
-      orchestrator:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-
-  self-learning:
-    build: ./services/self-learning
-    container_name: self-learning
-    restart: always
-    environment:
-      - DATABASE_URL=${DATABASE_URL}
-      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL}
-    volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-    depends_on:
-      orchestrator:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 256M
+          cpus: "0.4"
+          memory: 384M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   default:
-    name: ai-sales-network
+    name: aisales_network
