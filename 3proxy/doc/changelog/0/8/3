@@ -1,1 +1,0 @@
-! fixed: use SASIZE() instead of sizeof() in connect() for FreeBSD compatibility

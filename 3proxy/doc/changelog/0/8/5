@@ -1,1 +1,0 @@
-!Fix: mutex was used prior to initialization on 'log' command processing

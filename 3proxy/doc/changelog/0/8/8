@@ -1,3 +1,0 @@
-!! Fix resolver for non-compressed reply parsing (on mixed-case sensitive resolvers)
-! Fix plugins export on OpenWatcom compiler (light version)
-! Fix SOCKSv5

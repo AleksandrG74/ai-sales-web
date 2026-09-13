@@ -43,3 +43,19 @@ Thumbs.db
 # Старые версии
 *_v1_old.py
 *_old.py
+
+# 3proxy и прочий мусор
+3proxy*
+3proxy.zip
+bin64/
+cfg/
+doc/
+images/
+tg-ws-proxy/
+3proxy_new/
+*.3ps
+rus.3ps
+copying
+authors
+README
+icon.ico
