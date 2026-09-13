@@ -41,6 +41,19 @@ async def root():
 async def health():
     return {"status": "ok", "service": "AI Sales Agent"}
 
+
+
+@app.get("/api/database/download")
+async def download_db():
+    db_path = "/app/backend/data/database.db"
+    if not os.path.exists(db_path):
+        return {"error": "Database not found", "path": db_path}
+    return FileResponse(
+        db_path,
+        media_type="application/octet-stream",
+        filename="ai_sales_database.db"
+    )
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
