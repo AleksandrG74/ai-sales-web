@@ -37,12 +37,14 @@ class DialogDB(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     lead_id = Column(Integer, ForeignKey("leads.id"))
-    sender = Column(String(10))
+    sender = Column(String(100))
     message = Column(Text)
     timestamp = Column(DateTime, default=datetime.utcnow)
     strategy_used = Column(String(50), nullable=True)
     tokens_used = Column(Integer, nullable=True)
     response_time = Column(Float, nullable=True)
+    author_id = Column(String(50), nullable=True)
+    reply_to_msg_id = Column(Integer, nullable=True)
     
     lead = relationship("LeadDB", back_populates="dialogs")
 

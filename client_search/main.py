@@ -37,10 +37,12 @@ logger = logging.getLogger("client_search")
 
 
 def _extract_author(msg):
-    author = {"author_id": None, "author_username": "", "author_name": ""}
+    author = {"author_id": None, "author_username": "", "author_name": "", "reply_to_msg_id": None}
     try:
         if msg.from_id and hasattr(msg.from_id, "user_id"):
             author["author_id"] = msg.from_id.user_id
+        if msg.reply_to and hasattr(msg.reply_to, "reply_to_msg_id"):
+            author["reply_to_msg_id"] = msg.reply_to.reply_to_msg_id
         if msg.sender:
             s = msg.sender
             author["author_username"] = getattr(s, "username", "") or ""
@@ -144,12 +146,18 @@ class TelegramSearcher:
             lead = db.query(LeadDB).filter(
                 LeadDB.user_id == str(author["author_id"])
             ).first()
+            author_id = author.get("author_id")
+            reply_to = author.get("reply_to_msg_id")
+            sender_str = f"{author_id}@{source}" if author_id else f"unknown@{source}"
+            
             dialog = DialogDB(
                 lead_id=lead.id if lead else None,
-                sender=f"user_{source}",
+                sender=sender_str,
                 message=msg.text[:2000],
                 timestamp=msg.date,
                 strategy_used=",".join(tokens) if tokens else None,
+                author_id=str(author_id) if author_id else None,
+                reply_to_msg_id=reply_to,
             )
             db.add(dialog)
             db.commit()
